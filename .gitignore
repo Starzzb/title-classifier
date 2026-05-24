@@ -6,4 +6,3 @@ output/
 *.pyc
 __pycache__/
 _vision_tmp/
-tag_statistics.py
