@@ -91,8 +91,8 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 ### 2. 克隆项目
 
 ```bash
-git clone https://github.com/your-username/video-title-classifier.git
-cd video-title-classifier
+git clone https://github.com/Starzzb/tittle-classfication.git
+cd tittle-classfication
 ```
 
 ### 3. 创建虚拟环境并安装依赖
