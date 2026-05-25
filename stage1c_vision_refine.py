@@ -551,7 +551,7 @@ def build_yolo_context(yolo_results: list, selected_indices: list = None) -> str
     
     # 描述选中的帧
     if selected_indices and yolo_results:
-        context_lines.append(f"\n选中的{n_frames}帧分析：")
+        context_lines.append(f"\n选中的{len(selected_indices)}帧分析：")
         for i, idx in enumerate(selected_indices):
             if idx < len(yolo_results):
                 r = yolo_results[idx]
