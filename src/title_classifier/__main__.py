@@ -149,6 +149,7 @@ def cmd_vision(args):
                 title=original_title,
                 original_title=original_title,
                 srt_output_dir=srt_dir,
+                generate_audio=args.audio,
             )
 
             if "error" in result:
@@ -256,6 +257,7 @@ def main():
     vision_cmd.add_argument("--max-image-size", type=int, default=800, help="图片最大尺寸")
     vision_cmd.add_argument("--vlm-frames", type=int, default=10, help="VLM帧数（全面分析模式默认10帧）")
     vision_cmd.add_argument("--analysis-step", type=float, default=2.0, help="视频分析采样间隔（秒，默认2秒）")
+    vision_cmd.add_argument("--audio", action="store_true", help="生成音频字幕（追加到SRT文件）")
     vision_cmd.add_argument("--all", action="store_true", help="处理所有未识别的文件")
     vision_cmd.set_defaults(func=cmd_vision)
 

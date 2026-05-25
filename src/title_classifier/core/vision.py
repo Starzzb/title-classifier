@@ -706,6 +706,7 @@ class VisionProcessor:
         video_path: str,
         description: str,
         keywords: str,
+        final_name: str = None,
         video_summary: Dict = None,
         output_dir: str = "data/output/subtitles",
     ) -> str:
@@ -716,6 +717,7 @@ class VisionProcessor:
             video_path: 视频路径
             description: VLM描述
             keywords: VLM关键词
+            final_name: 最终文件名（用于SRT文件名）
             video_summary: 视频摘要（姿态分析等）
             output_dir: 输出目录
         
@@ -727,8 +729,13 @@ class VisionProcessor:
         srt_dir = Path(output_dir)
         srt_dir.mkdir(parents=True, exist_ok=True)
 
-        video_name = Path(video_path).stem
-        srt_path = srt_dir / f"{video_name}.srt"
+        # 使用final_name作为SRT文件名（去掉扩展名）
+        if final_name:
+            srt_name = Path(final_name).stem
+        else:
+            srt_name = Path(video_path).stem
+        
+        srt_path = srt_dir / f"{srt_name}.srt"
 
         # 构建姿态摘要
         pose_summary = ""
@@ -758,6 +765,7 @@ class VisionProcessor:
         title: str,
         original_title: str = None,
         srt_output_dir: str = "data/output/subtitles",
+        generate_audio: bool = False,
     ) -> Dict:
         """
         处理视频并生成所有结果
@@ -767,6 +775,7 @@ class VisionProcessor:
             title: 标题
             original_title: 原始文件名（用于生成final_name）
             srt_output_dir: SRT输出目录
+            generate_audio: 是否生成音频字幕
         
         Returns:
             {
@@ -793,10 +802,14 @@ class VisionProcessor:
         # 生成final_name
         final_name = self.generate_final_name(keywords, original_title)
 
-        # 生成SRT
+        # 生成SRT（使用final_name作为文件名）
         srt_path = self.generate_srt(
-            video_path, description, keywords, video_summary, srt_output_dir
+            video_path, description, keywords, final_name, video_summary, srt_output_dir
         )
+
+        # 如果启用音频字幕，追加到SRT文件
+        if generate_audio:
+            srt_path = self._append_audio_subtitles(video_path, srt_path)
 
         return {
             "description": description,
@@ -805,3 +818,49 @@ class VisionProcessor:
             "srt_path": srt_path,
             "video_summary": video_summary,
         }
+
+    def _append_audio_subtitles(self, video_path: str, srt_path: str) -> str:
+        """
+        追加音频字幕到SRT文件
+        
+        Args:
+            video_path: 视频路径
+            srt_path: 现有SRT文件路径
+        
+        Returns:
+            更新后的SRT文件路径
+        """
+        try:
+            from ..utils.audio import AudioProcessor
+            
+            logger.info("开始生成音频字幕...")
+            audio_processor = AudioProcessor(provider="mimo")
+            
+            # 生成临时音频字幕
+            temp_srt = srt_path + ".audio.tmp"
+            audio_result = audio_processor.process_video(video_path, output_srt=temp_srt)
+            
+            if audio_result and Path(temp_srt).exists():
+                # 读取音频字幕内容
+                with open(temp_srt, "r", encoding="utf-8") as f:
+                    audio_content = f.read()
+                
+                # 追加到现有SRT文件
+                with open(srt_path, "a", encoding="utf-8") as f:
+                    f.write("\n")
+                    f.write(audio_content)
+                
+                logger.info(f"音频字幕已追加到: {srt_path}")
+                
+                # 清理临时文件
+                try:
+                    Path(temp_srt).unlink()
+                except:
+                    pass
+            else:
+                logger.warning("音频字幕生成失败或无内容")
+            
+        except Exception as e:
+            logger.error(f"音频字幕处理失败: {e}")
+        
+        return srt_path
