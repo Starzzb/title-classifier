@@ -224,8 +224,8 @@ def main():
         print(f"视频不存在: {video_path}")
         return
     
-    # 分析整个视频，每0.5秒一帧
-    results = analyze_video(video_path, step_seconds=0.5, conf_threshold=0.3)
+    # 分析整个视频，每5秒一帧
+    results = analyze_video(video_path, step_seconds=5, conf_threshold=0.3)
     
     if results:
         # 打印摘要
