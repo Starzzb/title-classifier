@@ -12,13 +12,24 @@ from pathlib import Path
 from datetime import datetime
 from typing import Union, List
 
-# 人体检测模块
+import cv2
+import numpy as np
+
+# 人体检测模块（UHD）
 try:
     from stage1c_frame_selector import (load_model, find_human_frame, get_video_duration, 
                                         safe_timestamp, detect_and_crop_human, crop_human_region)
     HAS_FRAME_SELECTOR = True
 except ImportError:
     HAS_FRAME_SELECTOR = False
+
+# YOLO 检测模块
+try:
+    from stage1c_yolo_detector import (YOLODetector, YOLOTracker, detect_human_yolo, 
+                                       find_human_frame_yolo, YOLO_MODELS)
+    HAS_YOLO = True
+except ImportError:
+    HAS_YOLO = False
 
 # CLIP 分类模块
 try:
@@ -603,6 +614,18 @@ def main():
                         help="禁用embedding检测，使用标签比较")
     parser.add_argument("--embedding-threshold", type=float, default=0.75,
                         help="Embedding相似度阈值，低于此值认为有变化（默认0.75，稳健值）")
+    # YOLO 检测参数
+    parser.add_argument("--use-yolo", action="store_true", default=False,
+                        help="使用 YOLOv8 替代 UHD 进行人体检测（需安装 ultralytics）")
+    parser.add_argument("--yolo-model", type=str, default="detect",
+                        choices=["detect", "pose", "segment"],
+                        help="YOLO 模型类型（默认 detect）")
+    parser.add_argument("--yolo-conf", type=float, default=0.5,
+                        help="YOLO 置信度阈值（默认 0.5）")
+    parser.add_argument("--yolo-pose", action="store_true", default=False,
+                        help="使用 YOLO 姿态估计（自动启用 --use-yolo）")
+    parser.add_argument("--yolo-segment", action="store_true", default=False,
+                        help="使用 YOLO 实例分割（自动启用 --use-yolo）")
     args = parser.parse_args()
 
     # 使用统一的 Provider 配置
@@ -721,18 +744,47 @@ def main():
     skip_count = len(rows) - len(pending)
     print(f"共 {len(rows)} 条记录，待处理 {len(pending)} 条，跳过 {skip_count} 条")
     print(f"使用 {args.provider} 模型: {model}，每批 {args.batch_size} 条，间隔 {args.delay}s")
+    
+    # YOLO 参数处理
+    if args.yolo_pose:
+        args.use_yolo = True
+        args.yolo_model = "pose"
+    elif args.yolo_segment:
+        args.use_yolo = True
+        args.yolo_model = "segment"
+    
     use_frame_selector = not args.no_frame_selector
-    if use_frame_selector:
-        print(f"启用人体检测预处理（仅视频），模型: {args.model_path}")
+    use_yolo = args.use_yolo and HAS_YOLO
+    
+    if use_yolo:
+        print(f"启用 YOLO 人体检测（模型: {args.yolo_model}，置信度: {args.yolo_conf}）")
+        if not HAS_YOLO:
+            print("警告: 无法导入 YOLO 检测模块，将使用 UHD 模型")
+            use_yolo = False
+    elif use_frame_selector:
+        print(f"启用 UHD 人体检测预处理（仅视频），模型: {args.model_path}")
         if not HAS_FRAME_SELECTOR:
             print("警告: 无法导入人体检测模块，视频将使用默认帧提取")
     print(f"图片最大尺寸: {args.max_image_size}px")
     if args.dry_run:
         print("模拟模式，不会写入文件")
 
-    # 加载人体检测模型（默认启用）
+    # 加载人体检测模型
     frame_selector_session = None
-    if use_frame_selector and HAS_FRAME_SELECTOR:
+    yolo_detector = None
+    
+    if use_yolo:
+        # 加载 YOLO 模型
+        yolo_detector = YOLODetector(
+            model_type=args.yolo_model,
+            conf_threshold=args.yolo_conf
+        )
+        if not yolo_detector.load_model():
+            print("警告: YOLO 模型加载失败，将使用 UHD 模型")
+            use_yolo = False
+            yolo_detector = None
+    elif use_frame_selector and HAS_FRAME_SELECTOR:
+        # 加载 UHD 模型
         frame_selector_session = load_model(args.model_path)
 
     # 初始化标签统计
@@ -862,10 +914,33 @@ def main():
                         max_size=args.max_image_size
                     )
                 
-                # 策略2: 人体检测帧
+                # 策略2: 人体检测帧（支持YOLO或UHD）
                 human_frame_path = None
-                if frame_selector_session is not None:
-                    log_message(f"  [{idx+1}] 尝试人体检测...")
+                if use_yolo and yolo_detector is not None:
+                    # 使用 YOLO 检测人体
+                    log_message(f"  [{idx+1}] 使用 YOLO 检测人体...")
+                    human_result = find_human_frame_yolo(
+                        file_path, model_type=args.yolo_model,
+                        step_seconds=args.step_seconds,
+                        max_retries=args.max_retries,
+                        conf_threshold=args.yolo_conf
+                    )
+                    if human_result["found"]:
+                        human_frame_path = human_result["frame_path"]
+                        row["human_detected"] = "true"
+                        row["detection_confidence"] = f"{human_result['max_confidence']:.2f}"
+                        row["detection_timestamp"] = f"{human_result['timestamp']:.1f}s"
+                        row["detection_method"] = "yolo"
+                        log_message(f"  [{idx+1}] YOLO 检测到人体 @ {human_result['timestamp']:.1f}s, "
+                                  f"置信度: {human_result['max_confidence']:.2f}")
+                    else:
+                        row["human_detected"] = "false"
+                        row["detection_confidence"] = "0.00"
+                        row["detection_timestamp"] = "N/A"
+                        row["detection_method"] = "yolo"
+                elif frame_selector_session is not None:
+                    # 使用 UHD 检测人体
+                    log_message(f"  [{idx+1}] 使用 UHD 检测人体...")
                     human_result = find_human_frame(
                         file_path, frame_selector_session,
                         step_seconds=args.step_seconds,
@@ -877,16 +952,19 @@ def main():
                         row["human_detected"] = "true"
                         row["detection_confidence"] = f"{human_result['max_confidence']:.2f}"
                         row["detection_timestamp"] = f"{human_result['timestamp']:.1f}s"
-                        log_message(f"  [{idx+1}] 检测到人体 @ {human_result['timestamp']:.1f}s, "
+                        row["detection_method"] = "uhd"
+                        log_message(f"  [{idx+1}] UHD 检测到人体 @ {human_result['timestamp']:.1f}s, "
                                   f"置信度: {human_result['max_confidence']:.2f}")
                     else:
                         row["human_detected"] = "false"
                         row["detection_confidence"] = "0.00"
                         row["detection_timestamp"] = "N/A"
+                        row["detection_method"] = "uhd"
                 else:
                     row["human_detected"] = "N/A"
                     row["detection_confidence"] = "N/A"
                     row["detection_timestamp"] = "N/A"
+                    row["detection_method"] = "none"
                 
                 # 策略3: 补充均匀采样帧
                 all_frame_paths = list(keyframe_paths)
@@ -908,8 +986,32 @@ def main():
                 
                 # 裁剪人体区域（用于embedding检测）
                 human_crops = []
-                if frame_selector_session is not None and args.use_embedding_detection:
-                    log_message(f"  [{idx+1}] 裁剪人体区域用于embedding检测...")
+                if use_yolo and yolo_detector is not None and args.use_embedding_detection:
+                    # 使用 YOLO 分割裁剪人体区域
+                    log_message(f"  [{idx+1}] 使用 YOLO 裁剪人体区域...")
+                    for frame_path in all_frame_paths:
+                        # 读取图像
+                        data = np.fromfile(frame_path, dtype=np.uint8)
+                        frame = cv2.imdecode(data, cv2.IMREAD_COLOR)
+                        if frame is not None:
+                            if args.yolo_model == "segment":
+                                # 使用实例分割
+                                seg_result = yolo_detector.segment_persons(frame)
+                                if seg_result["has_person"]:
+                                    best_seg = max(seg_result["segments"], key=lambda x: x["area"])
+                                    human_crops.append(best_seg["cropped"])
+                                else:
+                                    human_crops.append(None)
+                            else:
+                                # 使用检测+裁剪
+                                crop_result = yolo_detector.detect_and_crop(frame, padding=0.15)
+                                human_crops.append(crop_result["human_crop"])
+                        else:
+                            human_crops.append(None)
+                    log_message(f"  [{idx+1}] 成功裁剪 {sum(1 for c in human_crops if c is not None)} 个人体区域")
+                elif frame_selector_session is not None and args.use_embedding_detection:
+                    # 使用 UHD 裁剪人体区域
+                    log_message(f"  [{idx+1}] 使用 UHD 裁剪人体区域...")
                     for frame_path in all_frame_paths:
                         crop_result = detect_and_crop_human(
                             frame_path, frame_selector_session,

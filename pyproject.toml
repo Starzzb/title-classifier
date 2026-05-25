@@ -4,15 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tittle-classfication"
-version = "4.0.0"
-description = "视频标题分类和重命名工具"
+version = "5.1.0"
+description = "视频标题分类和重命名工具（YOLO集成版）"
 readme = "readme.md"
 requires-python = ">=3.8"
 license = "MIT"
 authors = [
     {name = "Starzzb"}
 ]
-keywords = ["video", "classification", "rename", "nlp", "ollama", "zhipu", "vision", "mimo"]
+keywords = ["video", "classification", "rename", "nlp", "ollama", "zhipu", "vision", "mimo", "yolo"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -33,10 +33,11 @@ dependencies = [
     "open-clip-torch>=2.20.0",
     "torch>=2.0.0",
     "torchvision>=0.15.0",
+    "ultralytics>=8.0.0",
 ]
 
 [tool.setuptools]
-py-modules = ["renamecsv", "stage1_extract_propose", "stage1b_ai_refine", "stage1c_vision_refine", "stage1c_frame_selector", "stage1c_clip_classifier", "tag_statistics", "stage2_apply_rename", "gui"]
+py-modules = ["renamecsv", "stage1_extract_propose", "stage1b_ai_refine", "stage1c_vision_refine", "stage1c_frame_selector", "stage1c_clip_classifier", "stage1c_yolo_detector", "tag_statistics", "stage2_apply_rename", "gui"]
 
 [project.urls]
 Homepage = "https://github.com/Starzzb/tittle-classfication"
