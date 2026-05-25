@@ -200,11 +200,20 @@ class YOLODetector(BaseDetector):
                     valid_kpts = [k for k in keypoints if k["visible"]]
                     avg_conf = sum(k["confidence"] for k in valid_kpts) / len(valid_kpts) if valid_kpts else 0.0
 
+                    # 生成关键点字典用于姿态分析
+                    keypoints_dict = {k["name"]: {"x": k["x"], "y": k["y"], "conf": k["confidence"]} 
+                                     for k in valid_kpts}
+                    
+                    # 分析姿态
+                    pose_analysis = analyze_pose_for_vlm(keypoints_dict)
+
                     pose_info = {
                         "keypoints": keypoints,
+                        "keypoints_dict": keypoints_dict,
                         "bbox": bbox,
                         "avg_confidence": avg_conf,
                         "visible_count": len(valid_kpts),
+                        "pose_analysis": pose_analysis,
                     }
 
                     poses.append(pose_info)
