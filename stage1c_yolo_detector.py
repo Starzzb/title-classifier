@@ -758,6 +758,52 @@ def find_human_frame_yolo(video_path: str, model_type: str = "detect",
             "max_confidence": 0.0, "detections": [], "attempts": max_retries}
 
 
+def analyze_pose_for_vlm(keypoints: dict) -> list:
+    """
+    分析姿态，返回姿态描述列表（用于VLM上下文）
+    
+    Args:
+        keypoints: 关键点字典 {name: {x, y, conf}}
+    
+    Returns:
+        姿态描述列表，如 ["跪姿", "右侧朝向"]
+    """
+    analysis = []
+    
+    # 检测动作
+    if "left_shoulder" in keypoints and "left_hip" in keypoints:
+        shoulder_y = keypoints["left_shoulder"]["y"]
+        hip_y = keypoints["left_hip"]["y"]
+        if shoulder_y > hip_y:
+            analysis.append("弯腰/前倾")
+    
+    if "left_knee" in keypoints and "left_hip" in keypoints:
+        knee_y = keypoints["left_knee"]["y"]
+        hip_y = keypoints["left_hip"]["y"]
+        if knee_y < hip_y + 50:  # 膝盖高于臀部
+            analysis.append("跪姿/蹲姿")
+    
+    if "left_ankle" in keypoints and "left_knee" in keypoints:
+        ankle_y = keypoints["left_ankle"]["y"]
+        knee_y = keypoints["left_knee"]["y"]
+        if abs(ankle_y - knee_y) < 30:
+            analysis.append("坐姿")
+    
+    # 检测朝向
+    if "left_ear" in keypoints and "right_ear" in keypoints:
+        left_x = keypoints["left_ear"]["x"]
+        right_x = keypoints["right_ear"]["x"]
+        if left_x > right_x + 20:
+            analysis.append("右侧朝向")
+        elif right_x > left_x + 20:
+            analysis.append("左侧朝向")
+    
+    if not analysis:
+        analysis.append("站立/正常姿态")
+    
+    return analysis
+
+
 if __name__ == "__main__":
     """测试代码"""
     import sys

@@ -473,10 +473,18 @@ def image_to_base64(image_path: str, max_size: int = 800) -> str:
     return base64.b64encode(buffer).decode("utf-8")
 
 
-def build_vision_prompt(title: str, n_frames: int = 1) -> str:
+def build_vision_prompt(title: str, n_frames: int = 1, yolo_context: str = None) -> str:
+    """构建VLM提示词，支持YOLO上下文增强"""
+    
+    # YOLO上下文部分
+    yolo_section = ""
+    if yolo_context:
+        yolo_section = f"\n【视频预分析结果】\n{yolo_context}\n"
+    
     if n_frames > 1:
         return (
-            f'这是媒体文件 "{title}" 的{n_frames}个关键帧截图，用于文件管理归类。请进行纯技术性视觉分析：\n\n'
+            f'这是媒体文件 "{title}" 的{n_frames}个关键帧截图，用于文件管理归类。请进行纯技术性视觉分析：\n'
+            f'{yolo_section}\n'
             f'1. 描述：综合所有帧，客观描述画面中的可见元素（场景、人物穿着、人物动作、水印等）\n'
             f'2. 关键词：提取 4-8 个关键词，用逗号分隔\n\n'
             f'【关键词提取规则】\n'
@@ -490,7 +498,8 @@ def build_vision_prompt(title: str, n_frames: int = 1) -> str:
         )
     else:
         return (
-            f'这是媒体文件 "{title}" 的截图，用于文件管理归类。请进行纯技术性视觉分析：\n\n'
+            f'这是媒体文件 "{title}" 的截图，用于文件管理归类。请进行纯技术性视觉分析：\n'
+            f'{yolo_section}\n'
             f'1. 描述：客观描述画面中的可见元素（场景、人物穿着、人物动作、水印等）\n'
             f'2. 关键词：提取 4-8 个关键词，用逗号分隔\n\n'
             f'【关键词提取规则】\n'
@@ -501,6 +510,176 @@ def build_vision_prompt(title: str, n_frames: int = 1) -> str:
             f'描述：xxx\n'
             f'关键词：xxx, xxx, xxx'
         )
+
+
+def build_yolo_context(yolo_results: list, selected_indices: list = None) -> str:
+    """
+    构建YOLO检测结果的上下文描述
+    
+    Args:
+        yolo_results: YOLO检测结果列表
+        selected_indices: 选中的帧索引（可选，只描述选中的帧）
+    
+    Returns:
+        YOLO上下文描述字符串
+    """
+    if not yolo_results:
+        return ""
+    
+    context_lines = []
+    
+    # 整体统计
+    frames_with_person = [r for r in yolo_results if r.get("has_person")]
+    if frames_with_person:
+        # 统计姿态分布
+        pose_counts = {}
+        for r in frames_with_person:
+            poses = r.get("pose_analysis", ["未知"])
+            for pose in poses:
+                pose_counts[pose] = pose_counts.get(pose, 0) + 1
+        
+        # 主要姿态
+        main_pose = max(pose_counts, key=pose_counts.get) if pose_counts else "未知"
+        
+        context_lines.append(f"- 视频中检测到人体，主要姿态：{main_pose}")
+        context_lines.append(f"- 姿态分布：{', '.join([f'{k}({v}次)' for k, v in sorted(pose_counts.items(), key=lambda x: -x[1])])}")
+        
+        # 可见关键点统计
+        avg_visible = sum(r.get("visible_count", 0) for r in frames_with_person) / len(frames_with_person)
+        avg_conf = sum(r.get("avg_confidence", 0) for r in frames_with_person) / len(frames_with_person)
+        context_lines.append(f"- 平均可见关键点：{avg_visible:.1f}/17，平均置信度：{avg_conf:.2f}")
+    
+    # 描述选中的帧
+    if selected_indices and yolo_results:
+        context_lines.append(f"\n选中的{n_frames}帧分析：")
+        for i, idx in enumerate(selected_indices):
+            if idx < len(yolo_results):
+                r = yolo_results[idx]
+                if r.get("has_person"):
+                    poses = r.get("pose_analysis", ["未知"])
+                    conf = r.get("avg_confidence", 0)
+                    visible = r.get("visible_count", 0)
+                    timestamp = r.get("timestamp", 0)
+                    context_lines.append(f"  帧{i+1} ({timestamp:.1f}秒): {', '.join(poses)} (置信度:{conf:.2f}, 关键点:{visible}/17)")
+                else:
+                    context_lines.append(f"  帧{i+1}: 未检测到人体")
+    
+    return "\n".join(context_lines) if context_lines else ""
+
+
+def select_best_frames_by_pose(yolo_results: list, max_frames: int = 5) -> list:
+    """
+    基于YOLO姿态分析选择最佳帧送给VLM
+    
+    策略：
+    1. 优先选择姿态变化大的帧（捕捉动作多样性）
+    2. 优先选择置信度高的帧（保证检测质量）
+    3. 优先选择可见关键点多的帧（姿态信息完整）
+    
+    Args:
+        yolo_results: YOLO检测结果列表
+        max_frames: 最大帧数
+    
+    Returns:
+        选中的帧索引列表
+    """
+    if not yolo_results:
+        return []
+    
+    # 筛选有人体的帧
+    frames_with_person = [(i, r) for i, r in enumerate(yolo_results) if r.get("has_person")]
+    
+    if not frames_with_person:
+        # 如果没有检测到人体，返回均匀分布的帧
+        step = max(1, len(yolo_results) // max_frames)
+        return list(range(0, len(yolo_results), step))[:max_frames]
+    
+    if len(frames_with_person) <= max_frames:
+        # 如果有人体的帧数不足，直接返回所有
+        return [i for i, r in frames_with_person]
+    
+    # 计算每帧的得分
+    scored_frames = []
+    prev_pose = None
+    
+    for i, result in frames_with_person:
+        score = 0.0
+        
+        # 置信度得分 (0-40分)
+        conf = result.get("avg_confidence", 0)
+        score += conf * 40
+        
+        # 关键点可见性得分 (0-30分)
+        visible = result.get("visible_count", 0)
+        score += (visible / 17) * 30
+        
+        # 姿态多样性得分 (0-30分)
+        current_pose = tuple(result.get("pose_analysis", []))
+        if prev_pose is not None and current_pose != prev_pose:
+            score += 30
+        prev_pose = current_pose
+        
+        scored_frames.append((i, score, result))
+    
+    # 按得分排序，选择top-N
+    scored_frames.sort(key=lambda x: x[1], reverse=True)
+    selected = [item[0] for item in scored_frames[:max_frames]]
+    
+    # 按时间顺序排序
+    selected.sort()
+    
+    return selected
+
+
+def save_yolo_results(output_dir: str, video_name: str, yolo_results: list, selected_indices: list):
+    """
+    保存YOLO检测结果到单独的JSON文件
+    
+    Args:
+        output_dir: 输出目录
+        video_name: 视频文件名
+        yolo_results: YOLO检测结果
+        selected_indices: 选中的帧索引
+    """
+    import json
+    
+    yolo_dir = Path(output_dir) / "yolo_results"
+    yolo_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 构建保存的数据
+    save_data = {
+        "video_name": video_name,
+        "total_frames_analyzed": len(yolo_results),
+        "selected_frame_indices": selected_indices,
+        "summary": {},
+        "frames": yolo_results
+    }
+    
+    # 生成摘要
+    frames_with_person = [r for r in yolo_results if r.get("has_person")]
+    if frames_with_person:
+        pose_counts = {}
+        for r in frames_with_person:
+            poses = r.get("pose_analysis", ["未知"])
+            for pose in poses:
+                pose_counts[pose] = pose_counts.get(pose, 0) + 1
+        
+        save_data["summary"] = {
+            "frames_with_person": len(frames_with_person),
+            "person_ratio": len(frames_with_person) / len(yolo_results) if yolo_results else 0,
+            "pose_distribution": pose_counts,
+            "main_pose": max(pose_counts, key=pose_counts.get) if pose_counts else "未知",
+            "avg_confidence": sum(r.get("avg_confidence", 0) for r in frames_with_person) / len(frames_with_person),
+            "avg_visible_keypoints": sum(r.get("visible_count", 0) for r in frames_with_person) / len(frames_with_person)
+        }
+    
+    # 保存文件
+    json_path = yolo_dir / f"{Path(video_name).stem}_yolo.json"
+    with open(json_path, 'w', encoding='utf-8') as f:
+        json.dump(save_data, f, ensure_ascii=False, indent=2)
+    
+    log_message(f"[YOLO] 结果已保存: {json_path}")
+    return json_path
 
 
 def parse_vision_response(response: str) -> dict:
@@ -516,7 +695,7 @@ def parse_vision_response(response: str) -> dict:
 
 def call_vision_api(image_b64: Union[str, List[str]], title: str, provider: str,
                     model: str = None, api_key: str = None, timeout: int = 90,
-                    retries: int = 3, n_frames: int = 1) -> dict:
+                    retries: int = 3, n_frames: int = 1, yolo_context: str = None) -> dict:
     """
     调用视觉 API
     
@@ -529,11 +708,12 @@ def call_vision_api(image_b64: Union[str, List[str]], title: str, provider: str,
         timeout: 超时时间
         retries: 重试次数
         n_frames: 帧数
+        yolo_context: YOLO检测上下文（可选）
     
     Returns:
         {"description": str, "keywords": str}
     """
-    prompt = build_vision_prompt(title, n_frames)
+    prompt = build_vision_prompt(title, n_frames, yolo_context)
     
     result = provider_call_vision_api(
         provider_name=provider,
@@ -597,8 +777,8 @@ def main():
                         help="CLIP 置信度阈值，低于此值触发云端 VLM（默认 0.25）")
     parser.add_argument("--clip-frames", type=int, default=5,
                         help="视频 CLIP 分析的帧数（默认 5）")
-    parser.add_argument("--vlm-frames", type=int, default=3,
-                        help="送入云端VLM的帧数（默认 3，多帧可提高准确度）")
+    parser.add_argument("--vlm-frames", type=int, default=5,
+                        help="送入云端VLM的帧数（默认 5，多帧可提高准确度）")
     parser.add_argument("--multi-label", action="store_true", default=True,
                         help="CLIP 多标签模式（默认启用）")
     parser.add_argument("--single-label", action="store_true",
@@ -900,9 +1080,12 @@ def main():
                 vlm_frames = [tmp_img]
 
             elif is_video_file(file_path):
-                # ========== 视频处理（改进版：关键帧检测 + 人体检测 + 多帧CLIP） ==========
+                # ========== 视频处理（YOLO增强版） ==========
                 duration = get_video_duration(file_path)
                 log_message(f"  [{idx+1}] 视频模式: {original[:30]} (时长: {duration:.1f}s)")
+                
+                # 收集YOLO检测结果
+                yolo_results = []
                 
                 # 策略1: 关键帧检测（检测场景变化）
                 keyframe_paths = []
@@ -984,6 +1167,31 @@ def main():
                 
                 log_message(f"  [{idx+1}] 总共 {len(all_frame_paths)} 帧用于分析")
                 
+                # YOLO姿态分析（收集所有帧的姿态信息）
+                if use_yolo and yolo_detector is not None:
+                    log_message(f"  [{idx+1}] YOLO 姿态分析...")
+                    for frame_path in all_frame_paths:
+                        data = np.fromfile(frame_path, dtype=np.uint8)
+                        frame = cv2.imdecode(data, cv2.IMREAD_COLOR)
+                        if frame is not None:
+                            pose_result = yolo_detector.estimate_pose(frame)
+                            frame_data = {
+                                "has_person": pose_result["has_person"],
+                                "person_count": len(pose_result["poses"]) if pose_result["has_person"] else 0
+                            }
+                            if pose_result["has_person"]:
+                                best_pose = max(pose_result["poses"], key=lambda x: x["avg_confidence"])
+                                frame_data["keypoints"] = {kpt["name"]: {"x": kpt["x"], "y": kpt["y"], "conf": kpt["confidence"]} 
+                                                          for kpt in best_pose["keypoints"] if kpt["visible"]}
+                                frame_data["visible_count"] = best_pose["visible_count"]
+                                frame_data["avg_confidence"] = best_pose["avg_confidence"]
+                                frame_data["pose_analysis"] = analyze_pose_for_vlm(frame_data["keypoints"])
+                            yolo_results.append(frame_data)
+                        else:
+                            yolo_results.append({"has_person": False})
+                    
+                    # 保存YOLO结果到JSON（延迟到selected_indices计算后）
+                
                 # 裁剪人体区域（用于embedding检测）
                 human_crops = []
                 if use_yolo and yolo_detector is not None and args.use_embedding_detection:
@@ -1063,28 +1271,32 @@ def main():
                                 os.remove(fp)
                         continue
                     else:
-                        # 动态内容或低置信度：选择多帧送入VLM
+                        # 动态内容或低置信度：使用智能帧选择
                         row["vision_source"] = "clip+cloud"
                         log_message(f"  [{idx+1}] CLIP 最佳帧置信度 {best_tags['avg_confidence']:.2f}，调云端 VLM")
                         
-                        # 选择送入VLM的帧：优先使用CLIP置信度高的帧
-                        vlm_frames = []
-                        vlm_frame_count = min(args.vlm_frames, len(all_frame_paths))
-                        
-                        # 按CLIP置信度排序，选择top-N帧
-                        frame_confidences = [(i, all_tags["avg_confidence"]) 
-                                            for i, all_tags in enumerate(change_result["all_tags"])]
-                        frame_confidences.sort(key=lambda x: x[1], reverse=True)
-                        
-                        for i in range(vlm_frame_count):
-                            if i < len(frame_confidences):
-                                frame_idx = frame_confidences[i][0]
-                                vlm_frames.append(all_frame_paths[frame_idx])
+                        # 使用YOLO智能帧选择（如果有YOLO结果）
+                        if yolo_results:
+                            selected_indices = select_best_frames_by_pose(yolo_results, max_frames=args.vlm_frames)
+                            vlm_frames = [all_frame_paths[i] for i in selected_indices if i < len(all_frame_paths)]
+                            log_message(f"  [{idx+1}] YOLO智能选择 {len(vlm_frames)} 帧")
+                        else:
+                            # 降级到CLIP置信度选择
+                            vlm_frames = []
+                            vlm_frame_count = min(args.vlm_frames, len(all_frame_paths))
+                            frame_confidences = [(i, all_tags["avg_confidence"]) 
+                                                for i, all_tags in enumerate(change_result["all_tags"])]
+                            frame_confidences.sort(key=lambda x: x[1], reverse=True)
+                            
+                            for i in range(vlm_frame_count):
+                                if i < len(frame_confidences):
+                                    frame_idx = frame_confidences[i][0]
+                                    vlm_frames.append(all_frame_paths[frame_idx])
                         
                         # 如果有明确的人体检测帧，确保包含
                         if human_frame_path and human_frame_path not in vlm_frames:
                             vlm_frames.insert(0, human_frame_path)
-                            vlm_frames = vlm_frames[:vlm_frame_count]
+                            vlm_frames = vlm_frames[:args.vlm_frames]
                         
                         log_message(f"  [{idx+1}] 送入VLM {len(vlm_frames)} 帧")
                         
@@ -1093,10 +1305,15 @@ def main():
                             if fp not in vlm_frames and os.path.exists(fp):
                                 os.remove(fp)
                 elif not use_clip or row.get("vision_source", "") == "":
-                    # CLIP未启用，使用人体检测帧或默认帧
+                    # CLIP未启用，使用智能帧选择
                     row["vision_source"] = "cloud_only"
-                    vlm_frames = []
-                    if human_frame_path:
+                    
+                    # 使用YOLO智能帧选择
+                    if yolo_results:
+                        selected_indices = select_best_frames_by_pose(yolo_results, max_frames=args.vlm_frames)
+                        vlm_frames = [all_frame_paths[i] for i in selected_indices if i < len(all_frame_paths)]
+                        log_message(f"  [{idx+1}] YOLO智能选择 {len(vlm_frames)} 帧")
+                    elif human_frame_path:
                         vlm_frames = [human_frame_path]
                     else:
                         if not extract_frame(file_path, tmp_img, args.timestamp, max_size=args.max_image_size):
@@ -1115,19 +1332,32 @@ def main():
                 log_message(f"  [{idx+1}] 所有帧文件已被清理，跳过")
                 continue
             
+            # 构建YOLO上下文
+            yolo_context = None
+            if yolo_results and use_yolo:
+                # 获取选中帧的索引
+                selected_indices = [i for i, fp in enumerate(all_frame_paths) if fp in valid_vlm_frames]
+                yolo_context = build_yolo_context(yolo_results, selected_indices)
+                if yolo_context:
+                    log_message(f"  [{idx+1}] 已构建YOLO上下文")
+                
+                # 保存YOLO结果到JSON
+                save_yolo_results(str(output_path.parent), original, yolo_results, selected_indices)
+            
             if is_video_file(file_path) and len(valid_vlm_frames) > 1:
                 # 多帧模式
                 images_b64 = [image_to_base64(fp, max_size=args.max_image_size) for fp in valid_vlm_frames]
                 result = call_vision_api(images_b64, original, provider=provider,
                                         model=model, api_key=api_key,
-                                        retries=args.retries, n_frames=len(valid_vlm_frames))
+                                        retries=args.retries, n_frames=len(valid_vlm_frames),
+                                        yolo_context=yolo_context)
             else:
                 # 单帧模式
                 tmp_img = valid_vlm_frames[0]
                 image_b64 = image_to_base64(tmp_img, max_size=args.max_image_size)
                 result = call_vision_api(image_b64, original, provider=provider,
                                         model=model, api_key=api_key,
-                                        retries=args.retries)
+                                        retries=args.retries, yolo_context=yolo_context)
 
             description = result.get("description", "")
             keywords = result.get("keywords", "")
