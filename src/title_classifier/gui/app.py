@@ -218,9 +218,45 @@ class TitleClassifierApp(tk.Tk):
 
         # 执行按钮
         btn_frame = ttk.Frame(tab)
-        btn_frame.pack(fill=tk.X, padx=4, pady=8)
+        btn_frame.pack(fill=tk.X, padx=4, pady=4)
 
         ttk.Button(btn_frame, text="AI优化", command=self._run_refine).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_frame, text="加载CSV", command=self._load_s1b_preview).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_frame, text="确认写入", command=self._confirm_s1b_results).pack(side=tk.LEFT, padx=4)
+
+        # 预览表格
+        preview_frame = ttk.LabelFrame(tab, text="优化结果预览")
+        preview_frame.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+
+        # 创建树形视图
+        columns = ("original", "proposed", "refined")
+        self.s1b_tree = ttk.Treeview(preview_frame, columns=columns, show="headings", selectmode="browse")
+        self.s1b_tree.heading("original", text="原始标题")
+        self.s1b_tree.heading("proposed", text="建议标题")
+        self.s1b_tree.heading("refined", text="AI优化结果")
+        self.s1b_tree.column("original", width=200)
+        self.s1b_tree.column("proposed", width=150)
+        self.s1b_tree.column("refined", width=250)
+
+        # 滚动条
+        scrollbar = ttk.Scrollbar(preview_frame, orient=tk.VERTICAL, command=self.s1b_tree.yview)
+        self.s1b_tree.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.s1b_tree.pack(fill=tk.BOTH, expand=True)
+
+        # 右键菜单
+        self.s1b_context_menu = tk.Menu(self, tearoff=0)
+        self.s1b_context_menu.add_command(label="编辑", command=self._s1b_edit)
+        self.s1b_context_menu.add_command(label="采用原标题", command=self._s1b_use_original)
+        self.s1b_context_menu.add_command(label="采用建议标题", command=self._s1b_use_proposed)
+        self.s1b_context_menu.add_separator()
+        self.s1b_context_menu.add_command(label="删除", command=self._s1b_delete)
+
+        self.s1b_tree.bind("<Button-3>", self._s1b_show_context_menu)
+        self.s1b_tree.bind("<Double-1>", self._s1b_edit)
+
+        # 存储优化结果
+        self.s1b_results = {}
 
     def _build_stage1c_tab(self):
         """构建Stage1c视觉识别标签页"""
@@ -431,7 +467,163 @@ class TitleClassifierApp(tk.Tk):
         provider = self.s1b_provider_var.get()
 
         cmd = [PYTHON, "-m", "title_classifier", "refine", "-c", csv, "-p", provider]
-        self._run_command(cmd)
+        self._run_command(cmd, callback=self._load_s1b_preview)
+
+    def _load_s1b_preview(self):
+        """加载CSV到预览表格"""
+        csv_path = self.s1b_csv_var.get()
+        if not Path(csv_path).exists():
+            return
+
+        try:
+            import csv
+            # 清空表格
+            for item in self.s1b_tree.get_children():
+                self.s1b_tree.delete(item)
+            self.s1b_results.clear()
+
+            # 读取CSV
+            with open(csv_path, "r", encoding="utf-8-sig") as f:
+                reader = csv.DictReader(f)
+                for i, row in enumerate(reader):
+                    original = row.get("original_title", "")
+                    proposed = row.get("proposed_title", "")
+                    final = row.get("final_name", "")
+                    
+                    # 插入到表格
+                    item_id = self.s1b_tree.insert("", tk.END, values=(original, proposed, final))
+                    self.s1b_results[item_id] = {
+                        "row_index": i,
+                        "original_title": original,
+                        "proposed_title": proposed,
+                        "final_name": final,
+                    }
+
+            print(f"[完成] 加载 {len(self.s1b_results)} 条记录")
+
+        except Exception as e:
+            print(f"[错误] 加载CSV失败: {e}")
+
+    def _s1b_show_context_menu(self, event):
+        """显示右键菜单"""
+        item = self.s1b_tree.identify_row(event.y)
+        if item:
+            self.s1b_tree.selection_set(item)
+            self.s1b_context_menu.post(event.x_root, event.y_root)
+
+    def _s1b_edit(self, event=None):
+        """编辑选中项"""
+        selected = self.s1b_tree.selection()
+        if not selected:
+            return
+
+        item = selected[0]
+        values = self.s1b_tree.item(item, "values")
+        
+        # 弹出编辑对话框
+        dialog = tk.Toplevel(self)
+        dialog.title("编辑标题")
+        dialog.geometry("500x150")
+        dialog.transient(self)
+        dialog.grab_set()
+
+        ttk.Label(dialog, text="原始标题:").grid(row=0, column=0, padx=4, pady=4, sticky=tk.W)
+        ttk.Label(dialog, text=values[0][:50]).grid(row=0, column=1, padx=4, pady=4, sticky=tk.W)
+
+        ttk.Label(dialog, text="优化结果:").grid(row=1, column=0, padx=4, pady=4, sticky=tk.W)
+        edit_var = tk.StringVar(value=values[2])
+        ttk.Entry(dialog, textvariable=edit_var, width=50).grid(row=1, column=1, padx=4, pady=4)
+
+        def confirm():
+            new_value = edit_var.get()
+            self.s1b_tree.item(item, values=(values[0], values[1], new_value))
+            if item in self.s1b_results:
+                self.s1b_results[item]["final_name"] = new_value
+            dialog.destroy()
+
+        ttk.Button(dialog, text="确认", command=confirm).grid(row=2, column=0, columnspan=2, pady=8)
+
+    def _s1b_use_original(self):
+        """采用原标题"""
+        selected = self.s1b_tree.selection()
+        if not selected:
+            return
+
+        item = selected[0]
+        values = self.s1b_tree.item(item, "values")
+        original = values[0]
+        
+        self.s1b_tree.item(item, values=(original, values[1], original))
+        if item in self.s1b_results:
+            self.s1b_results[item]["final_name"] = original
+
+    def _s1b_use_proposed(self):
+        """采用建议标题"""
+        selected = self.s1b_tree.selection()
+        if not selected:
+            return
+
+        item = selected[0]
+        values = self.s1b_tree.item(item, "values")
+        proposed = values[1]
+        
+        self.s1b_tree.item(item, values=(values[0], proposed, proposed))
+        if item in self.s1b_results:
+            self.s1b_results[item]["final_name"] = proposed
+
+    def _s1b_delete(self):
+        """删除选中项"""
+        selected = self.s1b_tree.selection()
+        if not selected:
+            return
+
+        item = selected[0]
+        self.s1b_tree.delete(item)
+        if item in self.s1b_results:
+            del self.s1b_results[item]
+
+    def _confirm_s1b_results(self):
+        """确认写入优化结果到CSV"""
+        csv_path = self.s1b_csv_var.get()
+        if not Path(csv_path).exists():
+            messagebox.showwarning("警告", "CSV文件不存在")
+            return
+
+        if not self.s1b_results:
+            messagebox.showwarning("警告", "没有优化结果可写入")
+            return
+
+        if not messagebox.askyesno("确认", "确定要将优化结果写入CSV吗？"):
+            return
+
+        try:
+            import csv
+            # 读取CSV
+            with open(csv_path, "r", encoding="utf-8-sig") as f:
+                reader = csv.DictReader(f)
+                fieldnames = list(reader.fieldnames)
+                rows = list(reader)
+
+            # 更新final_name
+            updated = 0
+            for item_id, result in self.s1b_results.items():
+                row_index = result["row_index"]
+                if row_index < len(rows):
+                    rows[row_index]["final_name"] = result["final_name"]
+                    updated += 1
+
+            # 保存CSV
+            with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(rows)
+
+            print(f"[完成] 已更新 {updated} 条记录")
+            messagebox.showinfo("完成", f"已更新 {updated} 条记录")
+
+        except Exception as e:
+            print(f"[错误] 写入CSV失败: {e}")
+            messagebox.showerror("错误", str(e))
 
     def _run_vision(self):
         """运行视觉识别"""
