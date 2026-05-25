@@ -6,3 +6,4 @@ output/
 *.pyc
 __pycache__/
 _vision_tmp/
+*.pt
