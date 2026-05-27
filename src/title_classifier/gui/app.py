@@ -6,6 +6,7 @@ from tkinter import ttk, filedialog, messagebox, scrolledtext
 import subprocess
 import threading
 import sys
+import logging
 from pathlib import Path
 from datetime import datetime
 
@@ -77,6 +78,24 @@ class LogRedirector:
 
     def flush(self):
         pass
+
+
+class GUILogHandler(logging.Handler):
+    """将logging输出重定向到GUI文本框"""
+
+    def __init__(self, text_widget):
+        super().__init__()
+        self.text_widget = text_widget
+
+    def emit(self, record):
+        msg = self.format(record)
+        self.text_widget.after(0, self._append, msg)
+
+    def _append(self, msg):
+        self.text_widget.configure(state="normal")
+        self.text_widget.insert(tk.END, msg + "\n", "stdout")
+        self.text_widget.see(tk.END)
+        self.text_widget.configure(state="disabled")
 
 
 class TitleClassifierApp(tk.Tk):
@@ -155,6 +174,11 @@ class TitleClassifierApp(tk.Tk):
 
         sys.stdout = LogRedirector(self.log_text, "stdout")
         sys.stderr = LogRedirector(self.log_text, "stderr")
+
+        # 将logging也重定向到GUI日志框
+        gui_handler = GUILogHandler(self.log_text)
+        gui_handler.setFormatter(logging.Formatter("[%(name)s] %(message)s"))
+        logging.getLogger().addHandler(gui_handler)
 
     def _sync_csv(self):
         """同步所有标签页的CSV路径"""
