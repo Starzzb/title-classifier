@@ -1,9 +1,0 @@
-gui
-renamecsv
-stage1_extract_propose
-stage1b_ai_refine
-stage1c_clip_classifier
-stage1c_frame_selector
-stage1c_vision_refine
-stage2_apply_rename
-tag_statistics

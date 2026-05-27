@@ -1,0 +1,1409 @@
+"""视频标题分类工具 - 图形界面"""
+
+import os
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox, scrolledtext
+import subprocess
+import threading
+import sys
+from pathlib import Path
+from datetime import datetime
+
+from ..providers import (
+    get_available_providers, get_provider_config, get_api_key,
+    check_provider_availability, get_provider_display_name,
+    get_providers_for_gui, call_text_api, test_provider_connection,
+)
+from ..core.refiner import Refiner
+
+PROJECT_DIR = Path(__file__).parent.parent.parent.parent.resolve()
+PYTHON = sys.executable
+DEFAULT_CSV = "data/output/title_review.csv"
+
+
+class ToolTip:
+    """鼠标悬停提示工具类"""
+
+    def __init__(self, widget, text):
+        self.widget = widget
+        self.text = text
+        self.tip_window = None
+        self.widget.bind("<Enter>", self.show_tip)
+        self.widget.bind("<Leave>", self.hide_tip)
+
+    def show_tip(self, event=None):
+        x, y, _, _ = self.widget.bbox("insert") if hasattr(self.widget, "bbox") else (0, 0, 0, 0)
+        x += self.widget.winfo_rootx() + 20
+        y += self.widget.winfo_rooty() + 25
+
+        self.tip_window = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+
+        label = tk.Label(
+            tw,
+            text=self.text,
+            justify=tk.LEFT,
+            background="#ffffe0",
+            relief=tk.SOLID,
+            borderwidth=1,
+            font=("Microsoft YaHei", 9),
+            wraplength=350,
+        )
+        label.pack(ipadx=4, ipady=2)
+
+    def hide_tip(self, event=None):
+        if self.tip_window:
+            self.tip_window.destroy()
+            self.tip_window = None
+
+
+class LogRedirector:
+    """将print输出重定向到GUI文本框"""
+
+    def __init__(self, text_widget, tag="stdout"):
+        self.text_widget = text_widget
+        self.tag = tag
+
+    def write(self, msg):
+        if msg.strip():
+            self.text_widget.after(0, self._append, msg)
+
+    def _append(self, msg):
+        self.text_widget.configure(state="normal")
+        self.text_widget.insert(tk.END, msg + "\n", self.tag)
+        self.text_widget.see(tk.END)
+        self.text_widget.configure(state="disabled")
+
+    def flush(self):
+        pass
+
+
+class TitleClassifierApp(tk.Tk):
+    """视频标题分类工具主窗口"""
+
+    def __init__(self):
+        super().__init__()
+        self.title("视频标题分类工具 v6.0")
+        self.geometry("900x850")
+        self.minsize(800, 700)
+
+        self.process = None
+        self.running = False
+
+        # 加载.env文件
+        self._load_env()
+
+        # 共享CSV路径变量
+        self.csv_var = tk.StringVar(value=DEFAULT_CSV)
+
+        self._build_ui()
+        self._load_audio_config_to_gui()
+        self._sync_csv()
+
+    def _load_env(self):
+        """加载.env文件"""
+        env_path = PROJECT_DIR / ".env"
+        if not env_path.exists():
+            return
+        try:
+            with open(env_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    if "=" in line:
+                        key, _, val = line.partition("=")
+                        os.environ.setdefault(key.strip(), val.strip())
+        except Exception:
+            pass
+
+    def _build_ui(self):
+        """构建UI"""
+        main_frame = ttk.Frame(self)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+
+        self.notebook = ttk.Notebook(main_frame)
+        self.notebook.pack(fill=tk.BOTH, expand=True)
+
+        self._build_stage1_tab()
+        self._build_stage1b_tab()
+        self._build_stage1c_audio_tab()  # 新增：音频识别标签页
+        self._build_stage1c_tab()
+        self._build_stage2_tab()
+
+        # 切换标签页时同步CSV
+        self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
+
+        # 日志区域
+        log_frame = ttk.LabelFrame(main_frame, text="运行日志")
+        log_frame.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
+
+        log_toolbar = ttk.Frame(log_frame)
+        log_toolbar.pack(fill=tk.X, padx=4, pady=2)
+        ttk.Button(log_toolbar, text="清空日志", command=self._clear_log).pack(side=tk.RIGHT)
+        self.stop_btn = ttk.Button(log_toolbar, text="停止", command=self._stop_process, state="disabled")
+        self.stop_btn.pack(side=tk.RIGHT, padx=4)
+
+        self.log_text = scrolledtext.ScrolledText(
+            log_frame, height=12, state="disabled", font=("Consolas", 9), wrap=tk.WORD
+        )
+        self.log_text.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+        self.log_text.tag_configure("stdout", foreground="#cccccc")
+        self.log_text.tag_configure("stderr", foreground="#ff6666")
+        self.log_text.tag_configure("info", foreground="#66ccff")
+
+        sys.stdout = LogRedirector(self.log_text, "stdout")
+        sys.stderr = LogRedirector(self.log_text, "stderr")
+
+    def _sync_csv(self):
+        """同步所有标签页的CSV路径"""
+        csv = self.csv_var.get()
+        self.s1_output_var.set(csv)
+        self.s1b_csv_var.set(csv)
+        self.s1ca_csv_var.set(csv)
+        self.s1c_csv_var.set(csv)
+        self.s2_csv_var.set(csv)
+
+    def _on_tab_changed(self, event=None):
+        """切换标签页时同步"""
+        tab = self.notebook.select()
+        tab_name = self.notebook.tab(tab, "text")
+        if "Stage1 " in tab_name:
+            current = self.s1_output_var.get()
+        elif "Stage1b" in tab_name:
+            current = self.s1b_csv_var.get()
+        elif "音频识别" in tab_name:
+            current = self.s1ca_csv_var.get()
+        elif "视觉识别" in tab_name:
+            current = self.s1c_csv_var.get()
+        elif "Stage2" in tab_name:
+            current = self.s2_csv_var.get()
+        else:
+            return
+        self.csv_var.set(current)
+        self._sync_csv()
+
+    def _build_stage1_tab(self):
+        """构建Stage1扫描标签页"""
+        tab = ttk.Frame(self.notebook)
+        self.notebook.add(tab, text="Stage1 扫描")
+
+        # 目录选择
+        dir_frame = ttk.LabelFrame(tab, text="扫描目录")
+        dir_frame.pack(fill=tk.X, padx=4, pady=4)
+
+        self.s1_dir_var = tk.StringVar()
+        dir_entry = ttk.Entry(dir_frame, textvariable=self.s1_dir_var, width=60)
+        dir_entry.pack(side=tk.LEFT, padx=4)
+        ttk.Button(dir_frame, text="浏览...", command=self._browse_dir).pack(side=tk.LEFT, padx=4)
+        ToolTip(dir_entry, "选择要扫描的视频/图片目录，会递归扫描所有子目录")
+
+        # 输出文件
+        out_frame = ttk.LabelFrame(tab, text="输出文件")
+        out_frame.pack(fill=tk.X, padx=4, pady=4)
+
+        self.s1_output_var = tk.StringVar(value=DEFAULT_CSV)
+        out_entry = ttk.Entry(out_frame, textvariable=self.s1_output_var, width=60)
+        out_entry.pack(side=tk.LEFT, padx=4)
+        ToolTip(out_entry, "扫描结果保存的CSV文件路径")
+
+        # 选项
+        opt_frame = ttk.LabelFrame(tab, text="选项")
+        opt_frame.pack(fill=tk.X, padx=4, pady=4)
+
+        self.s1_append_var = tk.BooleanVar()
+        append_cb = ttk.Checkbutton(opt_frame, text="追加模式", variable=self.s1_append_var)
+        append_cb.pack(side=tk.LEFT, padx=4)
+        ToolTip(append_cb, "勾选后新扫描结果追加到现有CSV文件，否则覆盖")
+
+        self.s1_force_var = tk.BooleanVar()
+        force_cb = ttk.Checkbutton(opt_frame, text="强制重新分类", variable=self.s1_force_var)
+        force_cb.pack(side=tk.LEFT, padx=4)
+        ToolTip(force_cb, "勾选后即使文件已有分类标签也会重新处理")
+
+        # 执行按钮
+        btn_frame = ttk.Frame(tab)
+        btn_frame.pack(fill=tk.X, padx=4, pady=8)
+
+        scan_btn = ttk.Button(btn_frame, text="开始扫描", command=self._run_scan)
+        scan_btn.pack(side=tk.LEFT, padx=4)
+        ToolTip(scan_btn, "扫描目录中的媒体文件，提取关键词，生成待审CSV表")
+
+    def _build_stage1b_tab(self):
+        """构建Stage1b AI优化标签页"""
+        tab = ttk.Frame(self.notebook)
+        self.notebook.add(tab, text="Stage1b AI优化")
+
+        # CSV文件
+        csv_frame = ttk.LabelFrame(tab, text="CSV文件")
+        csv_frame.pack(fill=tk.X, padx=4, pady=4)
+
+        self.s1b_csv_var = tk.StringVar(value=DEFAULT_CSV)
+        csv_entry = ttk.Entry(csv_frame, textvariable=self.s1b_csv_var, width=60)
+        csv_entry.pack(side=tk.LEFT, padx=4)
+        ttk.Button(csv_frame, text="浏览...", command=self._browse_csv_s1b).pack(side=tk.LEFT, padx=4)
+        ToolTip(csv_entry, "Stage1生成的CSV文件，AI会优化其中的标题")
+
+        # Provider选择
+        provider_frame = ttk.LabelFrame(tab, text="AI Provider")
+        provider_frame.pack(fill=tk.X, padx=4, pady=4)
+
+        self.s1b_provider_var = tk.StringVar(value="ollama")
+        providers = get_providers_for_gui("1b")
+        provider_combo = ttk.Combobox(provider_frame, textvariable=self.s1b_provider_var, values=providers, state="readonly")
+        provider_combo.pack(side=tk.LEFT, padx=4)
+        ToolTip(provider_combo, "选择AI服务提供商\n- gcli: Google Gemini（推荐）\n- zhipu: 智谱GLM\n- ollama: 本地模型")
+
+        # 过滤选项
+        filter_frame = ttk.LabelFrame(tab, text="过滤选项")
+        filter_frame.pack(fill=tk.X, padx=4, pady=4)
+
+        self.s1b_filter_vision_var = tk.BooleanVar(value=True)
+        filter_cb = ttk.Checkbutton(filter_frame, text="只加载 needs_vision=FALSE 的行", variable=self.s1b_filter_vision_var)
+        filter_cb.pack(side=tk.LEFT, padx=4)
+        ToolTip(filter_cb, "勾选后只加载不需要视觉识别的行\n\n"
+                "- needs_vision=FALSE：文件名有意义，可用AI优化标题\n"
+                "- needs_vision=TRUE：文件名无意义，需要视觉识别")
+
+        # 执行按钮
+        btn_frame = ttk.Frame(tab)
+        btn_frame.pack(fill=tk.X, padx=4, pady=4)
+
+        load_btn = ttk.Button(btn_frame, text="加载CSV", command=self._load_s1b_preview)
+        load_btn.pack(side=tk.LEFT, padx=4)
+        ToolTip(load_btn, "加载CSV文件到预览表格\n\n"
+                "- 勾选过滤：只加载needs_vision=FALSE的行\n"
+                "- 不勾选：加载所有行")
+
+        use_original_btn = ttk.Button(btn_frame, text="填入原标题", command=self._s1b_fill_original_selected)
+        use_original_btn.pack(side=tk.LEFT, padx=4)
+        ToolTip(use_original_btn, "将选中行的原标题直接填入final_name\n\n"
+                "跳过AI优化，直接使用原标题作为最终文件名")
+
+        use_original_all_btn = ttk.Button(btn_frame, text="全部填入原标题", command=self._s1b_fill_original_all)
+        use_original_all_btn.pack(side=tk.LEFT, padx=4)
+        ToolTip(use_original_all_btn, "将所有行的原标题直接填入final_name\n\n"
+                "跳过AI优化，直接使用原标题作为最终文件名")
+
+        refine_btn = ttk.Button(btn_frame, text="AI优化选中行", command=self._run_refine_selected)
+        refine_btn.pack(side=tk.LEFT, padx=4)
+        ToolTip(refine_btn, "对选中的行进行AI标题优化\n\n"
+                "操作步骤：\n"
+                "1. 在表格中选择要优化的行（可多选）\n"
+                "2. 点击此按钮进行AI优化\n"
+                "3. 优化结果会显示在'AI优化结果'列")
+
+        refine_all_btn = ttk.Button(btn_frame, text="AI优化全部", command=self._run_refine_all)
+        refine_all_btn.pack(side=tk.LEFT, padx=4)
+        ToolTip(refine_all_btn, "对表格中所有行进行AI标题优化")
+
+        confirm_btn = ttk.Button(btn_frame, text="确认写入CSV", command=self._confirm_s1b_results)
+        confirm_btn.pack(side=tk.LEFT, padx=4)
+        ToolTip(confirm_btn, "将优化结果写入CSV文件\n\n"
+                "写入内容：\n"
+                "- final_name：优化后的标题（自动加中括号）\n"
+                "- needs_vision：可修改的分类标记\n"
+                "- review_status：设置为'待确认'")
+
+        # 预览表格
+        preview_frame = ttk.LabelFrame(tab, text="优化结果预览（右键菜单可编辑）")
+        preview_frame.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+
+        # 创建树形视图（多选模式）- 添加needs_vision列
+        columns = ("original", "needs_vision", "refined")
+        self.s1b_tree = ttk.Treeview(preview_frame, columns=columns, show="headings", selectmode="extended")
+        self.s1b_tree.heading("original", text="原始标题")
+        self.s1b_tree.heading("needs_vision", text="需要视觉识别")
+        self.s1b_tree.heading("refined", text="AI优化结果")
+        self.s1b_tree.column("original", width=250)
+        self.s1b_tree.column("needs_vision", width=80, anchor="center")
+        self.s1b_tree.column("refined", width=350)
+
+        # 滚动条
+        scrollbar = ttk.Scrollbar(preview_frame, orient=tk.VERTICAL, command=self.s1b_tree.yview)
+        self.s1b_tree.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.s1b_tree.pack(fill=tk.BOTH, expand=True)
+
+        # 右键菜单
+        self.s1b_context_menu = tk.Menu(self, tearoff=0)
+        self.s1b_context_menu.add_command(label="编辑选中行", command=self._s1b_edit)
+        self.s1b_context_menu.add_command(label="采用原标题", command=self._s1b_use_original)
+        self.s1b_context_menu.add_separator()
+        self.s1b_context_menu.add_command(label="切换 needs_vision (TRUE/FALSE)", command=self._s1b_toggle_needs_vision)
+        self.s1b_context_menu.add_separator()
+        self.s1b_context_menu.add_command(label="删除选中行", command=self._s1b_delete)
+
+        self.s1b_tree.bind("<Button-3>", self._s1b_show_context_menu)
+        self.s1b_tree.bind("<Double-1>", self._s1b_edit)
+
+        # 存储优化结果
+        self.s1b_results = {}
+
+    def _build_stage1c_audio_tab(self):
+        """构建Stage1c音频识别标签页（为视觉识别做准备）"""
+        tab = ttk.Frame(self.notebook)
+        self.notebook.add(tab, text="Stage1c 音频识别")
+
+        # 说明文本
+        desc_frame = ttk.LabelFrame(tab, text="说明")
+        desc_frame.pack(fill=tk.X, padx=4, pady=4)
+        desc_label = ttk.Label(desc_frame, text=(
+            "音频识别是视觉识别的前置步骤，用于提高视觉识别的准确率。\n"
+            "运行音频识别后，视觉识别会自动读取音频转录内容作为上下文，\n"
+            "从而生成更准确的视频描述和关键词。"
+        ), justify=tk.LEFT)
+        desc_label.pack(padx=4, pady=4)
+
+        # CSV文件
+        csv_frame = ttk.LabelFrame(tab, text="CSV文件")
+        csv_frame.pack(fill=tk.X, padx=4, pady=4)
+
+        self.s1ca_csv_var = tk.StringVar(value=DEFAULT_CSV)
+        csv_entry = ttk.Entry(csv_frame, textvariable=self.s1ca_csv_var, width=60)
+        csv_entry.pack(side=tk.LEFT, padx=4)
+        ttk.Button(csv_frame, text="浏览...", command=self._browse_csv_s1ca).pack(side=tk.LEFT, padx=4)
+        ToolTip(csv_entry, "Stage1生成的CSV文件，音频识别会处理needs_vision=TRUE的行")
+
+        # Provider选择
+        provider_frame = ttk.LabelFrame(tab, text="AI Provider")
+        provider_frame.pack(fill=tk.X, padx=4, pady=4)
+
+        self.s1ca_provider_var = tk.StringVar(value="mimo")
+        providers = get_providers_for_gui("audio")
+        provider_combo = ttk.Combobox(provider_frame, textvariable=self.s1ca_provider_var, values=providers, state="readonly")
+        provider_combo.pack(side=tk.LEFT, padx=4)
+        ToolTip(provider_combo, "选择音频AI服务提供商\n- mimo: 小米MiMo（推荐，支持音频理解）")
+
+        # 音频配置
+        audio_frame = ttk.LabelFrame(tab, text="音频配置")
+        audio_frame.pack(fill=tk.X, padx=4, pady=4)
+
+        # 第一行：基本配置
+        audio_row1 = ttk.Frame(audio_frame)
+        audio_row1.pack(fill=tk.X, padx=4, pady=2)
+
+        ttk.Label(audio_row1, text="音量阈值:").pack(side=tk.LEFT, padx=4)
+        self.s1ca_volume_threshold_var = tk.StringVar(value="0.01")
+        vol_entry = ttk.Entry(audio_row1, textvariable=self.s1ca_volume_threshold_var, width=8)
+        vol_entry.pack(side=tk.LEFT, padx=4)
+        ToolTip(vol_entry, "静音检测阈值（RMS能量，0-1之间）\n\n"
+                "- 较低值：更敏感，可能误判噪音为语音\n"
+                "- 较高值：更严格，可能漏掉轻声说话\n"
+                "- 推荐：0.01")
+
+        self.s1ca_skip_silence_var = tk.BooleanVar(value=True)
+        skip_cb = ttk.Checkbutton(audio_row1, text="跳过静音", variable=self.s1ca_skip_silence_var)
+        skip_cb.pack(side=tk.LEFT, padx=8)
+        ToolTip(skip_cb, "勾选后会跳过静音片段，节省API调用")
+
+        # 第二行：自适应分段配置
+        audio_row2 = ttk.Frame(audio_frame)
+        audio_row2.pack(fill=tk.X, padx=4, pady=2)
+
+        self.s1ca_adaptive_var = tk.BooleanVar(value=True)
+        adaptive_cb = ttk.Checkbutton(audio_row2, text="自适应分段", variable=self.s1ca_adaptive_var)
+        adaptive_cb.pack(side=tk.LEFT, padx=4)
+        ToolTip(adaptive_cb, "根据音频能量自动调整分段长度\n\n"
+                "- 高能量区域（说话多）：细分（15-20秒）\n"
+                "- 低能量区域（静音少）：合并（30-60秒）\n"
+                "- 可显著减少API调用次数")
+
+        ttk.Label(audio_row2, text="最小时长(秒):").pack(side=tk.LEFT, padx=8)
+        self.s1ca_min_segment_var = tk.StringVar(value="15")
+        min_seg_entry = ttk.Entry(audio_row2, textvariable=self.s1ca_min_segment_var, width=6)
+        min_seg_entry.pack(side=tk.LEFT, padx=4)
+        ToolTip(min_seg_entry, "自适应分段的最小时长\n\n"
+                "- 较小值：更灵活的分段，但API调用次数增加\n"
+                "- 较大值：更少的API调用，但可能错过语音边界\n"
+                "- 推荐：15秒")
+
+        ttk.Label(audio_row2, text="最大时长(秒):").pack(side=tk.LEFT, padx=8)
+        self.s1ca_max_segment_var = tk.StringVar(value="60")
+        max_seg_entry = ttk.Entry(audio_row2, textvariable=self.s1ca_max_segment_var, width=6)
+        max_seg_entry.pack(side=tk.LEFT, padx=4)
+        ToolTip(max_seg_entry, "自适应分段的最大时长\n\n"
+                "- 较小值：更精确的字幕时间戳\n"
+                "- 较大值：更少的API调用\n"
+                "- 推荐：60秒")
+
+        # 选项
+        opt_frame = ttk.LabelFrame(tab, text="选项")
+        opt_frame.pack(fill=tk.X, padx=4, pady=4)
+
+        self.s1ca_all_var = tk.BooleanVar()
+        all_cb = ttk.Checkbutton(opt_frame, text="处理所有未识别文件", variable=self.s1ca_all_var)
+        all_cb.pack(side=tk.LEFT, padx=4)
+        ToolTip(all_cb, "勾选后会处理所有audio_recognized!=true的文件\n\n"
+                "- 不勾选：只处理needs_vision=TRUE的文件\n"
+                "- 勾选：忽略needs_vision字段，处理所有未识别文件")
+
+        # 执行按钮
+        btn_frame = ttk.Frame(tab)
+        btn_frame.pack(fill=tk.X, padx=4, pady=8)
+
+        audio_btn = ttk.Button(btn_frame, text="音频识别", command=self._run_audio)
+        audio_btn.pack(side=tk.LEFT, padx=4)
+        ToolTip(audio_btn, "对视频进行音频识别\n\n"
+                "流程：\n"
+                "1. 扫描音频能量分布\n"
+                "2. 自适应分段（跳过静音）\n"
+                "3. 调用AI进行语音转录\n"
+                "4. 生成SRT字幕文件\n"
+                "5. 更新CSV中的audio_recognized和srt_path\n\n"
+                "完成后，视觉识别会自动读取音频转录内容")
+
+        save_config_btn = ttk.Button(btn_frame, text="保存配置", command=self._save_audio_config_from_gui)
+        save_config_btn.pack(side=tk.LEFT, padx=4)
+        ToolTip(save_config_btn, "保存音频配置到config文件")
+
+    def _build_stage1c_tab(self):
+        """构建Stage1c视觉识别标签页"""
+        tab = ttk.Frame(self.notebook)
+        self.notebook.add(tab, text="Stage1c 视觉识别")
+
+        # CSV文件
+        csv_frame = ttk.LabelFrame(tab, text="CSV文件")
+        csv_frame.pack(fill=tk.X, padx=4, pady=4)
+
+        self.s1c_csv_var = tk.StringVar(value=DEFAULT_CSV)
+        csv_entry = ttk.Entry(csv_frame, textvariable=self.s1c_csv_var, width=60)
+        csv_entry.pack(side=tk.LEFT, padx=4)
+        ttk.Button(csv_frame, text="浏览...", command=self._browse_csv_s1c).pack(side=tk.LEFT, padx=4)
+        ToolTip(csv_entry, "Stage1生成的CSV文件，视觉识别会分析视频内容并生成描述和关键词")
+
+        # Provider选择
+        provider_frame = ttk.LabelFrame(tab, text="AI Provider")
+        provider_frame.pack(fill=tk.X, padx=4, pady=4)
+
+        self.s1c_provider_var = tk.StringVar(value="gcli")
+        providers = get_providers_for_gui("1c")
+        provider_combo = ttk.Combobox(provider_frame, textvariable=self.s1c_provider_var, values=providers, state="readonly")
+        provider_combo.pack(side=tk.LEFT, padx=4)
+        ToolTip(provider_combo, "选择视觉AI服务提供商\n- gcli: Google Gemini（推荐）\n- mimo: 小米MiMo\n- zhipu: 智谱GLM")
+
+        # 检测器选择
+        det_frame = ttk.LabelFrame(tab, text="检测器")
+        det_frame.pack(fill=tk.X, padx=4, pady=4)
+
+        # 检测器类型选择（UHD或YOLO）
+        self.s1c_detector_var = tk.StringVar(value="yolo")
+        yolo_rb = ttk.Radiobutton(det_frame, text="YOLO姿态检测", variable=self.s1c_detector_var, value="yolo")
+        yolo_rb.pack(side=tk.LEFT, padx=4)
+        ToolTip(yolo_rb, "使用YOLO Pose模型检测人体姿态\n\n"
+                "功能：\n"
+                "- 检测视频中是否有人体\n"
+                "- 分析人体姿态（站立、跪姿、弯腰等）\n"
+                "- 智能选择包含人体的代表性帧\n"
+                "- 将姿态信息作为上下文传给VLM\n\n"
+                "适用场景：需要分析视频中人物动作时使用")
+
+        uhd_rb = ttk.Radiobutton(det_frame, text="UHD检测", variable=self.s1c_detector_var, value="uhd")
+        uhd_rb.pack(side=tk.LEFT, padx=4)
+        ToolTip(uhd_rb, "使用UHD模型检测人体\n\n"
+                "功能：\n"
+                "- 检测视频中是否有人体\n"
+                "- 裁剪人体区域用于VLM分析\n\n"
+                "适用场景：不需要姿态分析，只需检测人体时使用")
+
+        # CLIP选项
+        self.s1c_use_clip_var = tk.BooleanVar()
+        clip_cb = ttk.Checkbutton(det_frame, text="使用CLIP预分类", variable=self.s1c_use_clip_var)
+        clip_cb.pack(side=tk.LEFT, padx=8)
+        ToolTip(clip_cb, "使用CLIP模型进行图像预分类\n\n"
+                "功能：\n"
+                "- 快速识别图片内容类别\n"
+                "- 如果置信度足够高，可跳过VLM调用\n\n"
+                "适用场景：大量图片需要快速分类时使用")
+
+        # 分析参数
+        param_frame = ttk.LabelFrame(tab, text="分析参数")
+        param_frame.pack(fill=tk.X, padx=4, pady=4)
+
+        ttk.Label(param_frame, text="采样间隔(秒):").pack(side=tk.LEFT, padx=4)
+        self.s1c_analysis_step_var = tk.StringVar(value="2.0")
+        step_entry = ttk.Entry(param_frame, textvariable=self.s1c_analysis_step_var, width=6)
+        step_entry.pack(side=tk.LEFT, padx=4)
+        ToolTip(step_entry, "YOLO模式下视频采样间隔\n\n"
+                "- 默认2秒取一帧进行分析\n"
+                "- 较小值：分析更细致，但耗时更长\n"
+                "- 较大值：分析更快，但可能遗漏细节\n\n"
+                "108秒视频，间隔2秒 = 约54帧（自动限制最多50帧）")
+
+        ttk.Label(param_frame, text="VLM帧数:").pack(side=tk.LEFT, padx=8)
+        self.s1c_vlm_frames_var = tk.StringVar(value="10")
+        frames_entry = ttk.Entry(param_frame, textvariable=self.s1c_vlm_frames_var, width=6)
+        frames_entry.pack(side=tk.LEFT, padx=4)
+        ToolTip(frames_entry, "传给VLM分析的帧数\n\n"
+                "- YOLO模式：此参数不生效，由采样间隔决定\n"
+                "- UHD模式：均匀采样的帧数（默认10帧）")
+
+        # 选项
+        opt_frame = ttk.LabelFrame(tab, text="选项")
+        opt_frame.pack(fill=tk.X, padx=4, pady=4)
+
+        self.s1c_all_var = tk.BooleanVar()
+        all_cb = ttk.Checkbutton(opt_frame, text="处理所有未识别文件", variable=self.s1c_all_var)
+        all_cb.pack(side=tk.LEFT, padx=4)
+        ToolTip(all_cb, "勾选后会处理所有vision_keywords为空的文件\n\n"
+                "- 不勾选：只处理needs_vision=TRUE的文件\n"
+                "- 勾选：忽略needs_vision字段，处理所有未识别文件")
+
+        self.s1c_audio_var = tk.BooleanVar()
+        audio_cb = ttk.Checkbutton(opt_frame, text="生成音频字幕", variable=self.s1c_audio_var)
+        audio_cb.pack(side=tk.LEFT, padx=4)
+        ToolTip(audio_cb, "勾选后会提取视频音频并生成字幕\n\n"
+                "- 使用MiMo模型进行语音识别\n"
+                "- 字幕会追加到SRT文件中\n"
+                "- 需要配置MIMO_API_KEY")
+
+        # 音频配置
+        audio_frame = ttk.LabelFrame(tab, text="音频配置")
+        audio_frame.pack(fill=tk.X, padx=4, pady=4)
+
+        # 第一行：基本配置
+        audio_row1 = ttk.Frame(audio_frame)
+        audio_row1.pack(fill=tk.X, padx=4, pady=2)
+
+        ttk.Label(audio_row1, text="音量阈值:").pack(side=tk.LEFT, padx=4)
+        self.s1c_volume_threshold_var = tk.StringVar(value="0.01")
+        vol_entry = ttk.Entry(audio_row1, textvariable=self.s1c_volume_threshold_var, width=8)
+        vol_entry.pack(side=tk.LEFT, padx=4)
+        ToolTip(vol_entry, "静音检测阈值（RMS能量，0-1之间）\n\n"
+                "- 较低值：更敏感，可能误判噪音为语音\n"
+                "- 较高值：更严格，可能漏掉轻声说话\n"
+                "- 推荐：0.01")
+
+        self.s1c_skip_silence_var = tk.BooleanVar(value=True)
+        skip_cb = ttk.Checkbutton(audio_row1, text="跳过静音", variable=self.s1c_skip_silence_var)
+        skip_cb.pack(side=tk.LEFT, padx=8)
+        ToolTip(skip_cb, "勾选后会跳过静音片段，节省API调用")
+
+        # 第二行：自适应分段配置
+        audio_row2 = ttk.Frame(audio_frame)
+        audio_row2.pack(fill=tk.X, padx=4, pady=2)
+
+        self.s1c_adaptive_var = tk.BooleanVar(value=True)
+        adaptive_cb = ttk.Checkbutton(audio_row2, text="自适应分段", variable=self.s1c_adaptive_var)
+        adaptive_cb.pack(side=tk.LEFT, padx=4)
+        ToolTip(adaptive_cb, "根据音频能量自动调整分段长度\n\n"
+                "- 高能量区域（说话多）：细分（15-20秒）\n"
+                "- 低能量区域（静音少）：合并（30-60秒）\n"
+                "- 可显著减少API调用次数")
+
+        ttk.Label(audio_row2, text="最小时长(秒):").pack(side=tk.LEFT, padx=8)
+        self.s1c_min_segment_var = tk.StringVar(value="15")
+        min_seg_entry = ttk.Entry(audio_row2, textvariable=self.s1c_min_segment_var, width=6)
+        min_seg_entry.pack(side=tk.LEFT, padx=4)
+        ToolTip(min_seg_entry, "自适应分段的最小时长\n\n"
+                "- 较小值：更灵活的分段，但API调用次数增加\n"
+                "- 较大值：更少的API调用，但可能错过语音边界\n"
+                "- 推荐：15秒")
+
+        ttk.Label(audio_row2, text="最大时长(秒):").pack(side=tk.LEFT, padx=8)
+        self.s1c_max_segment_var = tk.StringVar(value="60")
+        max_seg_entry = ttk.Entry(audio_row2, textvariable=self.s1c_max_segment_var, width=6)
+        max_seg_entry.pack(side=tk.LEFT, padx=4)
+        ToolTip(max_seg_entry, "自适应分段的最大时长\n\n"
+                "- 较小值：更精确的字幕时间戳\n"
+                "- 较大值：更少的API调用\n"
+                "- 推荐：60秒")
+
+        # 保存配置按钮
+        save_config_btn = ttk.Button(audio_row2, text="保存配置", command=self._save_audio_config)
+        save_config_btn.pack(side=tk.LEFT, padx=8)
+        ToolTip(save_config_btn, "保存音频配置到config文件\n\n"
+                "配置会自动保存，也可手动点击此按钮保存")
+
+        # 执行按钮
+        btn_frame = ttk.Frame(tab)
+        btn_frame.pack(fill=tk.X, padx=4, pady=8)
+
+        vision_btn = ttk.Button(btn_frame, text="视觉识别", command=self._run_vision)
+        vision_btn.pack(side=tk.LEFT, padx=4)
+        ToolTip(vision_btn, "对视频进行视觉分析\n\n"
+                "YOLO模式流程：\n"
+                "1. 每2秒提取一帧\n"
+                "2. 用YOLO Pose分析每帧姿态\n"
+                "3. 智能选择代表性帧\n"
+                "4. 将帧图片+姿态信息传给VLM\n"
+                "5. 生成描述、关键词、final_name\n"
+                "6. 生成SRT元数据文件")
+
+    def _build_stage2_tab(self):
+        """构建Stage2重命名标签页"""
+        tab = ttk.Frame(self.notebook)
+        self.notebook.add(tab, text="Stage2 重命名")
+
+        # CSV文件
+        csv_frame = ttk.LabelFrame(tab, text="CSV文件")
+        csv_frame.pack(fill=tk.X, padx=4, pady=4)
+
+        self.s2_csv_var = tk.StringVar(value=DEFAULT_CSV)
+        csv_entry = ttk.Entry(csv_frame, textvariable=self.s2_csv_var, width=60)
+        csv_entry.pack(side=tk.LEFT, padx=4)
+        ttk.Button(csv_frame, text="浏览...", command=self._browse_csv_s2).pack(side=tk.LEFT, padx=4)
+        ToolTip(csv_entry, "包含final_name的CSV文件，用于批量重命名")
+
+        # 批量操作
+        batch_frame = ttk.LabelFrame(tab, text="批量操作")
+        batch_frame.pack(fill=tk.X, padx=4, pady=4)
+
+        confirm_btn = ttk.Button(batch_frame, text="一键确认所有记录", command=self._batch_confirm)
+        confirm_btn.pack(side=tk.LEFT, padx=4)
+        ToolTip(confirm_btn, "将CSV中所有记录的review_status设置为'已确认'\n\n"
+                "只有review_status='已确认'的记录才会被重命名")
+
+        clear_btn = ttk.Button(batch_frame, text="一键清空final_name", command=self._batch_clear_final_name)
+        clear_btn.pack(side=tk.LEFT, padx=4)
+        ToolTip(clear_btn, "清空CSV中所有记录的final_name字段\n\n"
+                "用于重置优化结果，重新开始处理")
+
+        # 选项
+        opt_frame = ttk.LabelFrame(tab, text="选项")
+        opt_frame.pack(fill=tk.X, padx=4, pady=4)
+
+        self.s2_dry_run_var = tk.BooleanVar(value=True)
+        dry_run_cb = ttk.Checkbutton(opt_frame, text="模拟运行", variable=self.s2_dry_run_var)
+        dry_run_cb.pack(side=tk.LEFT, padx=4)
+        ToolTip(dry_run_cb, "勾选后只显示重命名预览，不实际修改文件\n\n"
+                "- 勾选：安全模式，只预览不执行\n"
+                "- 取消勾选：实际执行重命名操作")
+
+        # 执行按钮
+        btn_frame = ttk.Frame(tab)
+        btn_frame.pack(fill=tk.X, padx=4, pady=8)
+
+        rename_btn = ttk.Button(btn_frame, text="执行重命名", command=self._run_rename)
+        rename_btn.pack(side=tk.LEFT, padx=4)
+        ToolTip(rename_btn, "根据CSV中的final_name批量重命名文件\n\n"
+                "重命名规则：\n"
+                "- 只处理review_status='已确认'的记录\n"
+                "- 新文件名 = final_name + 原扩展名\n"
+                "- 如果目标文件已存在，自动添加序号")
+
+    # ==================== 文件浏览 ====================
+
+    def _browse_dir(self):
+        """浏览目录"""
+        dir_path = filedialog.askdirectory(title="选择扫描目录")
+        if dir_path:
+            self.s1_dir_var.set(dir_path)
+
+    def _browse_csv_s1b(self):
+        """浏览CSV文件"""
+        file_path = filedialog.askopenfilename(title="选择CSV文件", filetypes=[("CSV文件", "*.csv")])
+        if file_path:
+            self.s1b_csv_var.set(file_path)
+
+    def _browse_csv_s1c(self):
+        """浏览CSV文件"""
+        file_path = filedialog.askopenfilename(title="选择CSV文件", filetypes=[("CSV文件", "*.csv")])
+        if file_path:
+            self.s1c_csv_var.set(file_path)
+
+    def _browse_csv_s1ca(self):
+        """浏览CSV文件（音频识别）"""
+        file_path = filedialog.askopenfilename(title="选择CSV文件", filetypes=[("CSV文件", "*.csv")])
+        if file_path:
+            self.s1ca_csv_var.set(file_path)
+
+    def _browse_csv_s2(self):
+        """浏览CSV文件"""
+        file_path = filedialog.askopenfilename(title="选择CSV文件", filetypes=[("CSV文件", "*.csv")])
+        if file_path:
+            self.s2_csv_var.set(file_path)
+
+    # ==================== 命令执行 ====================
+
+    def _run_command(self, cmd, callback=None):
+        """运行命令"""
+        if self.running:
+            messagebox.showwarning("警告", "有命令正在运行")
+            return
+
+        self.running = True
+        self.stop_btn.configure(state="normal")
+
+        def run():
+            try:
+                self.process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                )
+                for line in self.process.stdout:
+                    print(line.rstrip())
+                self.process.wait()
+                if self.process.returncode == 0:
+                    print("\n[完成] 命令执行成功")
+                else:
+                    print(f"\n[错误] 命令执行失败，返回码: {self.process.returncode}")
+            except Exception as e:
+                print(f"\n[错误] {e}")
+            finally:
+                self.running = False
+                self.stop_btn.configure(state="disabled")
+                if callback:
+                    callback()
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+
+    def _stop_process(self):
+        """停止进程"""
+        if self.process:
+            self.process.terminate()
+            self.process = None
+            self.running = False
+            self.stop_btn.configure(state="disabled")
+            print("[停止] 命令已终止")
+
+    def _clear_log(self):
+        """清空日志"""
+        self.log_text.configure(state="normal")
+        self.log_text.delete(1.0, tk.END)
+        self.log_text.configure(state="disabled")
+
+    def _run_scan(self):
+        """运行扫描"""
+        dir_path = self.s1_dir_var.get()
+        if not dir_path:
+            messagebox.showwarning("警告", "请选择扫描目录")
+            return
+
+        output = self.s1_output_var.get()
+        cmd = [PYTHON, "-m", "title_classifier", "scan", "-d", dir_path, "-o", output]
+
+        if self.s1_append_var.get():
+            cmd.append("-a")
+        if self.s1_force_var.get():
+            cmd.append("--force")
+
+        self._run_command(cmd)
+
+    def _load_s1b_preview(self):
+        """加载CSV到预览表格"""
+        csv_path = self.s1b_csv_var.get()
+        if not Path(csv_path).exists():
+            messagebox.showwarning("警告", "CSV文件不存在")
+            return
+
+        try:
+            import csv
+            # 清空表格
+            for item in self.s1b_tree.get_children():
+                self.s1b_tree.delete(item)
+            self.s1b_results.clear()
+
+            # 是否过滤needs_vision
+            filter_vision = self.s1b_filter_vision_var.get()
+
+            # 读取CSV
+            loaded_count = 0
+            with open(csv_path, "r", encoding="utf-8-sig") as f:
+                reader = csv.DictReader(f)
+                for i, row in enumerate(reader):
+                    needs_vision = row.get("needs_vision", "").strip().lower()
+                    
+                    # 如果启用过滤，只加载needs_vision=FALSE的行
+                    if filter_vision and needs_vision == "true":
+                        continue
+
+                    original = row.get("original_title", "")
+                    final = row.get("final_name", "")
+                    
+                    # 插入到表格（显示原始标题、needs_vision、AI优化结果）
+                    item_id = self.s1b_tree.insert("", tk.END, values=(original, needs_vision.upper(), final))
+                    self.s1b_results[item_id] = {
+                        "row_index": i,
+                        "original_title": original,
+                        "final_name": final,
+                        "needs_vision": needs_vision,
+                    }
+                    loaded_count += 1
+
+            filter_desc = "（已过滤needs_vision=TRUE）" if filter_vision else ""
+            print(f"[完成] 加载 {loaded_count} 条记录{filter_desc}")
+
+        except Exception as e:
+            print(f"[错误] 加载CSV失败: {e}")
+
+    def _run_refine_selected(self):
+        """对选中的行进行AI优化"""
+        selected = self.s1b_tree.selection()
+        if not selected:
+            messagebox.showwarning("警告", "请先选择要优化的行")
+            return
+
+        provider = self.s1b_provider_var.get()
+
+        # 收集选中行的原始标题（去除扩展名后发送给AI）
+        items_to_refine = []
+        for item_id in selected:
+            values = self.s1b_tree.item(item_id, "values")
+            original = values[0]
+            needs_vision = values[1]  # keep needs_vision
+            # 去除扩展名后发送给AI
+            stem = Path(original).stem
+            items_to_refine.append((item_id, original, needs_vision, stem))
+
+        total = len(items_to_refine)
+        print(f"[开始] 正在优化 {total} 条记录（每5条一批）...")
+
+        # 禁用按钮防止重复点击
+        self._set_refine_buttons_state("disabled")
+
+        def run_refine():
+            try:
+                refiner = Refiner(provider=provider)
+
+                # 定义进度回调
+                def on_progress(current, total_count, title):
+                    batch_num = current // 5 + 1
+                    total_batches = (total_count + 4) // 5
+                    self.after(0, lambda: print(f"  [批次 {batch_num}/{total_batches}] 正在处理: {title[:40]}..."))
+
+                # 批量优化（发送去除扩展名的标题）
+                stems = [t[3] for t in items_to_refine]
+                refined_stems = refiner.refine_batch(stems, progress_callback=on_progress)
+
+                # 在主线程中更新GUI
+                def update_gui():
+                    for (item_id, original, needs_vision, _), refined in zip(items_to_refine, refined_stems):
+                        # 显示时保持原始标题，final_name使用优化结果（不包含扩展名）
+                        self.s1b_tree.item(item_id, values=(original, needs_vision, refined))
+                        if item_id in self.s1b_results:
+                            self.s1b_results[item_id]["final_name"] = refined
+                    print(f"[完成] 已优化 {total} 条记录")
+                    self._set_refine_buttons_state("normal")
+
+                self.after(0, update_gui)
+
+            except Exception as e:
+                def show_error():
+                    print(f"[错误] AI优化失败: {e}")
+                    messagebox.showerror("错误", f"AI优化失败: {e}")
+                    self._set_refine_buttons_state("normal")
+                self.after(0, show_error)
+
+        # 在后台线程中执行
+        threading.Thread(target=run_refine, daemon=True).start()
+
+    def _run_refine_all(self):
+        """对所有行进行AI优化"""
+        all_items = self.s1b_tree.get_children()
+        if not all_items:
+            messagebox.showwarning("警告", "表格为空，请先加载CSV")
+            return
+
+        total = len(all_items)
+        if not messagebox.askyesno("确认", f"确定要优化所有 {total} 条记录吗？"):
+            return
+
+        provider = self.s1b_provider_var.get()
+
+        # 收集所有行的原始标题（去除扩展名后发送给AI）
+        items_to_refine = []
+        for item_id in all_items:
+            values = self.s1b_tree.item(item_id, "values")
+            original = values[0]
+            needs_vision = values[1]  # keep needs_vision
+            # 去除扩展名后发送给AI
+            stem = Path(original).stem
+            items_to_refine.append((item_id, original, needs_vision, stem))
+
+        print(f"[开始] 正在优化 {total} 条记录（每5条一批）...")
+
+        # 禁用按钮防止重复点击
+        self._set_refine_buttons_state("disabled")
+
+        def run_refine():
+            try:
+                refiner = Refiner(provider=provider)
+
+                # 定义进度回调
+                def on_progress(current, total_count, title):
+                    batch_num = current // 5 + 1
+                    total_batches = (total_count + 4) // 5
+                    self.after(0, lambda: print(f"  [批次 {batch_num}/{total_batches}] 正在处理: {title[:40]}..."))
+
+                # 批量优化（发送去除扩展名的标题）
+                stems = [t[3] for t in items_to_refine]
+                refined_stems = refiner.refine_batch(stems, progress_callback=on_progress)
+
+                # 在主线程中更新GUI
+                def update_gui():
+                    for (item_id, original, needs_vision, _), refined in zip(items_to_refine, refined_stems):
+                        # 显示时保持原始标题，final_name使用优化结果（不包含扩展名）
+                        self.s1b_tree.item(item_id, values=(original, needs_vision, refined))
+                        if item_id in self.s1b_results:
+                            self.s1b_results[item_id]["final_name"] = refined
+                    print(f"[完成] 已优化 {total} 条记录")
+                    self._set_refine_buttons_state("normal")
+
+                self.after(0, update_gui)
+
+            except Exception as e:
+                def show_error():
+                    print(f"[错误] AI优化失败: {e}")
+                    messagebox.showerror("错误", f"AI优化失败: {e}")
+                    self._set_refine_buttons_state("normal")
+                self.after(0, show_error)
+
+        # 在后台线程中执行
+        threading.Thread(target=run_refine, daemon=True).start()
+
+    def _set_refine_buttons_state(self, state):
+        """设置优化按钮的状态"""
+        # 遍历Stage1b标签页中的所有按钮，设置其状态
+        for widget in self.winfo_children():
+            if isinstance(widget, ttk.Notebook):
+                for tab in widget.winfo_children():
+                    for child in tab.winfo_children():
+                        if isinstance(child, ttk.Frame):
+                            for btn in child.winfo_children():
+                                if isinstance(btn, ttk.Button) and btn.cget("text") in ["AI优化选中行", "AI优化全部"]:
+                                    btn.configure(state=state)
+
+    def _s1b_show_context_menu(self, event):
+        """显示右键菜单"""
+        item = self.s1b_tree.identify_row(event.y)
+        if item:
+            self.s1b_tree.selection_set(item)
+            self.s1b_context_menu.post(event.x_root, event.y_root)
+
+    def _s1b_edit(self, event=None):
+        """编辑选中项"""
+        selected = self.s1b_tree.selection()
+        if not selected:
+            return
+
+        item = selected[0]
+        values = self.s1b_tree.item(item, "values")
+        
+        # 弹出编辑对话框
+        dialog = tk.Toplevel(self)
+        dialog.title("编辑标题")
+        dialog.geometry("500x150")
+        dialog.transient(self)
+        dialog.grab_set()
+
+        ttk.Label(dialog, text="原始标题:").grid(row=0, column=0, padx=4, pady=4, sticky=tk.W)
+        ttk.Label(dialog, text=values[0][:50]).grid(row=0, column=1, padx=4, pady=4, sticky=tk.W)
+
+        ttk.Label(dialog, text="优化结果:").grid(row=1, column=0, padx=4, pady=4, sticky=tk.W)
+        edit_var = tk.StringVar(value=values[2])  # index 2 is refined
+        ttk.Entry(dialog, textvariable=edit_var, width=50).grid(row=1, column=1, padx=4, pady=4)
+
+        def confirm():
+            new_value = edit_var.get()
+            self.s1b_tree.item(item, values=(values[0], values[1], new_value))  # keep needs_vision
+            if item in self.s1b_results:
+                self.s1b_results[item]["final_name"] = new_value
+            dialog.destroy()
+
+        ttk.Button(dialog, text="确认", command=confirm).grid(row=2, column=0, columnspan=2, pady=8)
+
+    def _s1b_use_original(self):
+        """采用原标题（单条）"""
+        selected = self.s1b_tree.selection()
+        if not selected:
+            return
+
+        item = selected[0]
+        values = self.s1b_tree.item(item, "values")
+        original = values[0]
+        needs_vision = values[1]  # keep needs_vision
+        
+        self.s1b_tree.item(item, values=(original, needs_vision, original))
+        if item in self.s1b_results:
+            self.s1b_results[item]["final_name"] = original
+
+    def _s1b_toggle_needs_vision(self):
+        """切换选中行的needs_vision值"""
+        selected = self.s1b_tree.selection()
+        if not selected:
+            messagebox.showwarning("警告", "请先选择要修改的行")
+            return
+
+        count = 0
+        for item in selected:
+            values = self.s1b_tree.item(item, "values")
+            current = values[1].upper()  # needs_vision is at index 1
+            new_value = "FALSE" if current == "TRUE" else "TRUE"
+            self.s1b_tree.item(item, values=(values[0], new_value, values[2]))
+            if item in self.s1b_results:
+                self.s1b_results[item]["needs_vision"] = new_value.lower()
+            count += 1
+
+        print(f"[完成] 已切换 {count} 条记录的needs_vision值")
+
+    def _s1b_fill_original_selected(self):
+        """将选中行的原标题填入final_name"""
+        selected = self.s1b_tree.selection()
+        if not selected:
+            messagebox.showwarning("警告", "请先选择要填入的行")
+            return
+
+        count = 0
+        for item in selected:
+            values = self.s1b_tree.item(item, "values")
+            original = values[0]
+            needs_vision = values[1]  # keep needs_vision
+            self.s1b_tree.item(item, values=(original, needs_vision, original))
+            if item in self.s1b_results:
+                self.s1b_results[item]["final_name"] = original
+            count += 1
+
+        print(f"[完成] 已将 {count} 条记录的final_name设为原标题")
+
+    def _s1b_fill_original_all(self):
+        """将所有行的原标题填入final_name"""
+        all_items = self.s1b_tree.get_children()
+        if not all_items:
+            messagebox.showwarning("警告", "表格为空")
+            return
+
+        if not messagebox.askyesno("确认", f"确定要将所有 {len(all_items)} 条记录的final_name设为原标题吗？"):
+            return
+
+        count = 0
+        for item in all_items:
+            values = self.s1b_tree.item(item, "values")
+            original = values[0]
+            needs_vision = values[1]  # keep needs_vision
+            self.s1b_tree.item(item, values=(original, needs_vision, original))
+            if item in self.s1b_results:
+                self.s1b_results[item]["final_name"] = original
+            count += 1
+
+        print(f"[完成] 已将 {count} 条记录的final_name设为原标题")
+
+    def _s1b_delete(self):
+        """删除选中项"""
+        selected = self.s1b_tree.selection()
+        if not selected:
+            return
+
+        item = selected[0]
+        self.s1b_tree.delete(item)
+        if item in self.s1b_results:
+            del self.s1b_results[item]
+
+    def _confirm_s1b_results(self):
+        """确认写入优化结果到CSV"""
+        csv_path = self.s1b_csv_var.get()
+        if not Path(csv_path).exists():
+            messagebox.showwarning("警告", "CSV文件不存在")
+            return
+
+        if not self.s1b_results:
+            messagebox.showwarning("警告", "没有优化结果可写入")
+            return
+
+        if not messagebox.askyesno("确认", "确定要将优化结果写入CSV吗？\n\n写入格式: [final_name]"):
+            return
+
+        try:
+            import csv
+            # 读取CSV
+            with open(csv_path, "r", encoding="utf-8-sig") as f:
+                reader = csv.DictReader(f)
+                fieldnames = list(reader.fieldnames)
+                rows = list(reader)
+
+            # 更新final_name（自动加中括号）和needs_vision
+            updated = 0
+            for item_id, result in self.s1b_results.items():
+                row_index = result["row_index"]
+                if row_index < len(rows):
+                    final_name = result["final_name"]
+                    # 自动加中括号
+                    if final_name and not final_name.startswith("["):
+                        final_name = f"[{final_name}]"
+                    rows[row_index]["final_name"] = final_name
+                    
+                    # 更新needs_vision
+                    needs_vision = result.get("needs_vision", "")
+                    if needs_vision:
+                        rows[row_index]["needs_vision"] = needs_vision
+                    
+                    updated += 1
+
+            # 保存CSV
+            with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(rows)
+
+            print(f"[完成] 已更新 {updated} 条记录")
+            messagebox.showinfo("完成", f"已更新 {updated} 条记录")
+
+        except Exception as e:
+            print(f"[错误] 写入CSV失败: {e}")
+            messagebox.showerror("错误", str(e))
+
+    def _run_audio(self):
+        """运行音频识别"""
+        csv = self.s1ca_csv_var.get()
+        provider = self.s1ca_provider_var.get()
+
+        # 保存音频配置
+        self._save_audio_config_from_gui()
+
+        cmd = [PYTHON, "-m", "title_classifier", "audio", "-c", csv, "-p", provider]
+
+        if self.s1ca_all_var.get():
+            cmd.append("--all")
+
+        self._run_command(cmd)
+
+    def _save_audio_config_from_gui(self):
+        """从音频识别标签页保存配置"""
+        try:
+            import tomllib
+            config_path = PROJECT_DIR / "config" / "default.toml"
+            
+            # 读取现有配置
+            config = {}
+            if config_path.exists():
+                with open(config_path, "rb") as f:
+                    config = tomllib.load(f)
+            
+            # 更新音频配置
+            if "audio" not in config:
+                config["audio"] = {}
+            
+            config["audio"]["skip_silence"] = self.s1ca_skip_silence_var.get()
+            config["audio"]["volume_threshold"] = float(self.s1ca_volume_threshold_var.get())
+            
+            if "adaptive" not in config["audio"]:
+                config["audio"]["adaptive"] = {}
+            
+            config["audio"]["adaptive"]["enabled"] = self.s1ca_adaptive_var.get()
+            config["audio"]["adaptive"]["min_segment"] = int(self.s1ca_min_segment_var.get())
+            config["audio"]["adaptive"]["max_segment"] = int(self.s1ca_max_segment_var.get())
+            
+            # 写入配置文件
+            import tomli_w
+            with open(config_path, "wb") as f:
+                tomli_w.dump(config, f)
+            
+            print(f"[配置] 音频配置已保存到: {config_path}")
+            
+        except ImportError:
+            print("[警告] tomli_w 未安装，无法保存配置文件")
+        except Exception as e:
+            print(f"[警告] 保存音频配置失败: {e}")
+
+    def _run_vision(self):
+        """运行视觉识别"""
+        csv = self.s1c_csv_var.get()
+        provider = self.s1c_provider_var.get()
+
+        cmd = [PYTHON, "-m", "title_classifier", "vision", "-c", csv, "-p", provider]
+
+        # 检测器选择
+        detector = self.s1c_detector_var.get()
+        if detector == "yolo":
+            cmd.append("--use-yolo")
+        # UHD不需要额外参数，默认使用
+
+        if self.s1c_use_clip_var.get():
+            cmd.append("--use-clip")
+
+        # 添加分析参数
+        analysis_step = self.s1c_analysis_step_var.get()
+        if analysis_step:
+            cmd.extend(["--analysis-step", analysis_step])
+
+        vlm_frames = self.s1c_vlm_frames_var.get()
+        if vlm_frames:
+            cmd.extend(["--vlm-frames", vlm_frames])
+
+        if self.s1c_all_var.get():
+            cmd.append("--all")
+
+        # 保存音频配置到config文件（无论是否启用音频都保存）
+        self._save_audio_config()
+
+        if self.s1c_audio_var.get():
+            cmd.append("--audio")
+
+        self._run_command(cmd)
+
+    def _load_audio_config_to_gui(self):
+        """从config文件加载音频配置到GUI"""
+        try:
+            import tomllib
+            config_path = PROJECT_DIR / "config" / "default.toml"
+            
+            if not config_path.exists():
+                return
+            
+            with open(config_path, "rb") as f:
+                config = tomllib.load(f)
+            
+            audio_config = config.get("audio", {})
+            adaptive_config = audio_config.get("adaptive", {})
+            
+            # 更新GUI变量
+            if "volume_threshold" in audio_config:
+                self.s1c_volume_threshold_var.set(str(audio_config["volume_threshold"]))
+            if "skip_silence" in audio_config:
+                self.s1c_skip_silence_var.set(audio_config["skip_silence"])
+            if "enabled" in adaptive_config:
+                self.s1c_adaptive_var.set(adaptive_config["enabled"])
+            if "min_segment" in adaptive_config:
+                self.s1c_min_segment_var.set(str(adaptive_config["min_segment"]))
+            if "max_segment" in adaptive_config:
+                self.s1c_max_segment_var.set(str(adaptive_config["max_segment"]))
+            
+            print(f"[配置] 已加载音频配置: 阈值={audio_config.get('volume_threshold', 0.01)}")
+            
+        except Exception as e:
+            print(f"[警告] 加载音频配置失败: {e}")
+
+    def _save_audio_config(self):
+        """保存音频配置到config文件"""
+        try:
+            import tomllib
+            config_path = PROJECT_DIR / "config" / "default.toml"
+            
+            # 读取现有配置
+            config = {}
+            if config_path.exists():
+                with open(config_path, "rb") as f:
+                    config = tomllib.load(f)
+            
+            # 更新音频配置
+            if "audio" not in config:
+                config["audio"] = {}
+            
+            config["audio"]["skip_silence"] = self.s1c_skip_silence_var.get()
+            config["audio"]["volume_threshold"] = float(self.s1c_volume_threshold_var.get())
+            
+            if "adaptive" not in config["audio"]:
+                config["audio"]["adaptive"] = {}
+            
+            config["audio"]["adaptive"]["enabled"] = self.s1c_adaptive_var.get()
+            config["audio"]["adaptive"]["min_segment"] = int(self.s1c_min_segment_var.get())
+            config["audio"]["adaptive"]["max_segment"] = int(self.s1c_max_segment_var.get())
+            
+            # 写入配置文件
+            import tomli_w
+            with open(config_path, "wb") as f:
+                tomli_w.dump(config, f)
+            
+            print(f"[配置] 音频配置已保存到: {config_path}")
+            
+        except ImportError:
+            print("[警告] tomli_w 未安装，无法保存配置文件")
+        except Exception as e:
+            print(f"[警告] 保存音频配置失败: {e}")
+
+    def _batch_confirm(self):
+        """批量确认所有记录"""
+        csv_path = self.s2_csv_var.get()
+        if not Path(csv_path).exists():
+            messagebox.showwarning("警告", "CSV文件不存在")
+            return
+
+        if not messagebox.askyesno("确认", "确定要将所有记录的review_status设置为'已确认'吗？"):
+            return
+
+        try:
+            import csv
+            # 读取CSV
+            with open(csv_path, "r", encoding="utf-8-sig") as f:
+                reader = csv.DictReader(f)
+                fieldnames = list(reader.fieldnames)
+                rows = list(reader)
+
+            # 确保字段存在
+            if "review_status" not in fieldnames:
+                fieldnames.append("review_status")
+
+            # 批量设置
+            count = 0
+            for row in rows:
+                if row.get("review_status") != "已确认":
+                    row["review_status"] = "已确认"
+                    count += 1
+
+            # 保存CSV
+            with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(rows)
+
+            print(f"[完成] 已确认 {count} 条记录")
+            messagebox.showinfo("完成", f"已确认 {count} 条记录")
+
+        except Exception as e:
+            print(f"[错误] {e}")
+            messagebox.showerror("错误", str(e))
+
+    def _batch_clear_final_name(self):
+        """批量清空final_name"""
+        csv_path = self.s2_csv_var.get()
+        if not Path(csv_path).exists():
+            messagebox.showwarning("警告", "CSV文件不存在")
+            return
+
+        if not messagebox.askyesno("确认", "确定要清空所有记录的final_name吗？"):
+            return
+
+        try:
+            import csv
+            # 读取CSV
+            with open(csv_path, "r", encoding="utf-8-sig") as f:
+                reader = csv.DictReader(f)
+                fieldnames = list(reader.fieldnames)
+                rows = list(reader)
+
+            # 批量清空
+            count = 0
+            for row in rows:
+                if row.get("final_name"):
+                    row["final_name"] = ""
+                    count += 1
+
+            # 保存CSV
+            with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(rows)
+
+            print(f"[完成] 已清空 {count} 条记录的final_name")
+            messagebox.showinfo("完成", f"已清空 {count} 条记录的final_name")
+
+        except Exception as e:
+            print(f"[错误] {e}")
+            messagebox.showerror("错误", str(e))
+
+    def _run_rename(self):
+        """运行重命名"""
+        csv = self.s2_csv_var.get()
+
+        cmd = [PYTHON, "-m", "title_classifier", "rename", "-c", csv]
+
+        if self.s2_dry_run_var.get():
+            cmd.append("--dry-run")
+
+        self._run_command(cmd)
+
+
+def main():
+    """启动GUI"""
+    app = TitleClassifierApp()
+    app.mainloop()
+
+
+if __name__ == "__main__":
+    main()

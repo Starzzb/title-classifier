@@ -3,24 +3,23 @@ requires = ["setuptools>=45", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "tittle-classfication"
-version = "4.0.0"
+name = "title-classifier"
+version = "6.0.0"
 description = "视频标题分类和重命名工具"
-readme = "readme.md"
-requires-python = ">=3.8"
+readme = "README.md"
+requires-python = ">=3.10"
 license = "MIT"
 authors = [
     {name = "Starzzb"}
 ]
-keywords = ["video", "classification", "rename", "nlp", "ollama", "zhipu", "vision", "mimo"]
+keywords = ["video", "classification", "rename", "nlp", "vision", "yolo", "clip"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
 ]
 
 dependencies = [
@@ -33,11 +32,29 @@ dependencies = [
     "open-clip-torch>=2.20.0",
     "torch>=2.0.0",
     "torchvision>=0.15.0",
+    "ultralytics>=8.0.0",
+    "tomli-w>=1.0.0",
 ]
 
-[tool.setuptools]
-py-modules = ["renamecsv", "stage1_extract_propose", "stage1b_ai_refine", "stage1c_vision_refine", "stage1c_frame_selector", "stage1c_clip_classifier", "tag_statistics", "stage2_apply_rename", "gui"]
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+]
+
+[project.scripts]
+title-classifier = "title_classifier.__main__:main"
+
+[project.gui-scripts]
+title-classifier-gui = "title_classifier.gui.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
 
 [project.urls]
-Homepage = "https://github.com/Starzzb/tittle-classfication"
-Repository = "https://github.com/Starzzb/tittle-classfication.git"
+Homepage = "https://github.com/Starzzb/title-classifier"
+Repository = "https://github.com/Starzzb/title-classifier.git"

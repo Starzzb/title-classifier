@@ -1,24 +1,26 @@
-"""
-标签统计管理器
-从云端 VLM 结果中提取新标签，动态扩充 CLIP 候选集
-"""
+"""标签统计管理器"""
+
 import json
+import logging
 from pathlib import Path
 from datetime import datetime
+from typing import Dict, Optional
+
+logger = logging.getLogger(__name__)
 
 STATS_FILE = "models/tag_statistics.json"
 
-# 维度关键词映射规则：用于自动判断 VLM 返回的标签属于哪个维度
+# 维度关键词映射规则
 CLOTHING_INDICATORS = {
     "装", "服", "裙", "袜", "鞋", "衣", "裤", "帽", "饰", "链", "带", "领",
-    "袖", "袖", "蕾丝", "纱", "绸", "绒", "皮", "布",
+    "袖", "蕾丝", "纱", "绸", "绒", "皮", "布",
     "outfit", "dress", "skirt", "stocking", "sock", "shoe", "shirt", "pant",
     "hat", "glove", "lace", "silk", "leather", "latex", "satin", "velvet",
     "collar", "ribbon", "bow", "corset", "bodysuit", "swimsuit", "bikini",
     "uniform", "costume", "lingerie", "apron", "cape", "cloak", "hood",
     "heels", "boots", "sandals", "slippers", "mary janes",
     "头饰", "发饰", "耳环", "项链", "手链", "项圈", "choker",
-    "headband", "earring", "necklace", "bracelet", "collar",
+    "headband", "earring", "necklace", "bracelet",
     "围裙", "斗篷", "披风", "兜帽", "手套", "口罩",
     "丝袜", "连裤袜", "长筒袜", "过膝袜", "白丝", "黑丝",
     "水手服", "女仆装", "护士装", "校服", "旗袍", "和服", "汉服",
@@ -30,7 +32,7 @@ ACTION_INDICATORS = {
     "sitting", "standing", "kneeling", "squatting", "lying", "bending",
     "walking", "running", "jumping", "crawling", "holding", "touching",
     "posing", "dancing", "exercising", "stretching", "reaching",
-    "selfie", "posing", "arching", "leaning", "hugging", "kissing",
+    "selfie", "arching", "leaning", "hugging", "kissing",
     "仰卧", "俯卧", "侧卧", "跨坐", "盘腿", "翘腿", "张腿",
     "低头", "抬头", "转身", "回头", "俯身",
 }
@@ -46,7 +48,6 @@ HAIRSTYLE_INDICATORS = {
     "purple hair", "silver hair", "green hair", "orange hair",
 }
 
-# 场景指标（用于判断是否为场景标签，场景标签不纳入 CLIP 学习）
 SCENE_INDICATORS = {
     "室", "房", "间", "床", "沙发", "地板", "墙", "窗", "门",
     "浴室", "厨房", "客厅", "卧室", "酒店", "影棚", "户外",
@@ -58,22 +59,17 @@ SCENE_INDICATORS = {
 }
 
 
-def _classify_tag_dimension(tag: str) -> str | None:
-    """
-    判断一个标签属于哪个维度
-    返回: "clothing" / "action" / "hairstyle" / None（场景或其他，不学习）
-    """
+def _classify_tag_dimension(tag: str) -> Optional[str]:
+    """判断一个标签属于哪个维度"""
     tag_lower = tag.lower().strip()
     if not tag_lower:
         return None
 
-    # 计算各维度匹配得分
     clothing_score = sum(1 for w in CLOTHING_INDICATORS if w in tag_lower)
     action_score = sum(1 for w in ACTION_INDICATORS if w in tag_lower)
     hairstyle_score = sum(1 for w in HAIRSTYLE_INDICATORS if w in tag_lower)
     scene_score = sum(1 for w in SCENE_INDICATORS if w in tag_lower)
 
-    # 如果场景得分最高，跳过
     scores = {
         "clothing": clothing_score,
         "action": action_score,
@@ -83,11 +79,9 @@ def _classify_tag_dimension(tag: str) -> str | None:
     max_dim = max(scores, key=scores.get)
     max_score = scores[max_dim]
 
-    # 场景标签优先排除
     if scene_score > max_score:
         return None
 
-    # 需要至少一个匹配
     if max_score == 0:
         return None
 
@@ -95,12 +89,11 @@ def _classify_tag_dimension(tag: str) -> str | None:
 
 
 def _tag_to_clip_prompt(tag: str, dimension: str) -> str:
-    """将中文/英文标签转换为 CLIP prompt 格式"""
+    """将中文/英文标签转换为CLIP prompt格式"""
     tag = tag.strip()
     if not tag:
         return ""
 
-    # 如果已经是英文，直接构建 prompt
     if all(ord(c) < 128 for c in tag):
         if dimension == "clothing":
             return f"a photo of a person wearing {tag}"
@@ -110,9 +103,6 @@ def _tag_to_clip_prompt(tag: str, dimension: str) -> str:
             return f"a photo of a person with {tag}"
         return tag
 
-    # 中文标签：直接返回原文（作为 CLIP prompt 的补充候选）
-    # CLIP 的文本编码器对中文有一定理解能力，但不如英文
-    # 这里保留中文，让 CLIP 尝试匹配
     return tag
 
 
@@ -130,7 +120,6 @@ class TagStatistics:
         try:
             with open(self.stats_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            # 确保结构完整
             for dim in ["clothing", "action", "hairstyle"]:
                 if dim not in data:
                     data[dim] = {}
@@ -145,26 +134,18 @@ class TagStatistics:
             "clothing": {},
             "action": {},
             "hairstyle": {},
-            "meta": {
-                "total_updates": 0,
-                "last_updated": "",
-            }
+            "meta": {"total_updates": 0, "last_updated": ""},
         }
 
-    def save(self):
+    def save(self) -> None:
         """保存统计数据"""
         self.stats_path.parent.mkdir(parents=True, exist_ok=True)
         self.data["meta"]["last_updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with open(self.stats_path, "w", encoding="utf-8") as f:
             json.dump(self.data, f, ensure_ascii=False, indent=2)
 
-    def update_from_vlm(self, keywords: str):
-        """
-        从云端 VLM 返回的关键词中学习新标签
-        
-        Args:
-            keywords: 逗号分隔的关键词字符串，如 "女仆装, 跪姿, 双马尾, 室内场景"
-        """
+    def update_from_vlm(self, keywords: str) -> None:
+        """从VLM返回的关键词中学习新标签"""
         if not keywords:
             return
 
@@ -172,14 +153,12 @@ class TagStatistics:
         updated = False
 
         for tag in tags:
-            # 去除可能的标签前缀（如 CLIP 标记）
             tag = tag.strip("[]() ")
             if not tag or len(tag) < 2:
                 continue
 
             dim = _classify_tag_dimension(tag)
             if dim is None:
-                # 场景或其他标签，不学习
                 continue
 
             tag_lower = tag.lower()
@@ -197,17 +176,8 @@ class TagStatistics:
             self.data["meta"]["total_updates"] += 1
             self.save()
 
-    def get_learned_prompts(self, dimension: str, min_count: int = 2) -> dict[str, str]:
-        """
-        获取某维度的已学习标签（作为 CLIP 候选 prompt）
-        
-        Args:
-            dimension: "clothing" / "action" / "hairstyle"
-            min_count: 最小出现次数（过滤噪声）
-        
-        Returns:
-            {clip_prompt: 中文标签} 字典
-        """
+    def get_learned_prompts(self, dimension: str, min_count: int = 2) -> Dict[str, str]:
+        """获取某维度的已学习标签"""
         if dimension not in self.data:
             return {}
 
@@ -220,17 +190,8 @@ class TagStatistics:
                     result[clip_prompt] = cn_label
         return result
 
-    def get_all_prompts(self, dimension: str, base_categories: dict) -> dict[str, str]:
-        """
-        获取某维度的完整候选集（base + learned）
-        
-        Args:
-            dimension: "clothing" / "action" / "hairstyle"
-            base_categories: 基础分类 {英文prompt: 中文标签}
-        
-        Returns:
-            合并后的 {prompt: label_cn} 字典
-        """
+    def get_all_prompts(self, dimension: str, base_categories: dict) -> Dict[str, str]:
+        """获取某维度的完整候选集"""
         merged = dict(base_categories)
         learned = self.get_learned_prompts(dimension)
         merged.update(learned)
@@ -245,21 +206,3 @@ class TagStatistics:
             lines.append(f"  {dim}: {total} tags ({learned} learned)")
         lines.append(f"  total updates: {self.data['meta']['total_updates']}")
         return "\n".join(lines)
-
-
-if __name__ == "__main__":
-    # 测试
-    stats = TagStatistics()
-    print("当前标签统计:")
-    print(stats.get_stats_summary())
-
-    # 模拟 VLM 返回的关键词
-    test_keywords = "女仆装, 跪姿, 双马尾, 室内场景, 水印, 黑色丝袜, 角色扮演"
-    print(f"\n学习新标签: {test_keywords}")
-    stats.update_from_vlm(test_keywords)
-    print("\n更新后统计:")
-    print(stats.get_stats_summary())
-
-    # 测试获取已学习标签
-    learned = stats.get_learned_prompts("clothing")
-    print(f"\n已学习的穿着标签: {learned}")

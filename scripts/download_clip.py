@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 # 模型缓存目录：项目内 models/clip/
-CACHE_DIR = Path(__file__).parent / "models" / "clip"
+CACHE_DIR = Path(__file__).parent.parent / "models" / "clip"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 # 设置 HF 缓存到项目目录

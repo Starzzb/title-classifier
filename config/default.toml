@@ -1,0 +1,67 @@
+[general]
+output_dir = "data/output"
+log_dir = "data/logs"
+csv_filename = "title_review.csv"
+
+[scanner]
+video_extensions = [
+    ".mp4",
+    ".mkv",
+    ".avi",
+    ".mov",
+    ".flv",
+    ".wmv",
+    ".webm",
+    ".m4v",
+    ".ts",
+]
+image_extensions = [
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".bmp",
+    ".webp",
+    ".gif",
+    ".tiff",
+]
+top_keywords = 5
+
+[vision]
+max_image_size = 800
+vlm_frames = 5
+clip_frames = 5
+max_keyframes = 8
+keyframe_threshold = 30.0
+
+[yolo]
+model_type = "detect"
+confidence = 0.5
+
+[clip]
+threshold = 0.25
+multi_label = true
+embedding_threshold = 0.75
+
+[providers]
+default = "gcli"
+timeout = 90
+retries = 3
+batch_size = 3
+delay = 2.0
+
+[audio]
+enabled = false
+provider = "mimo"
+skip_silence = true
+volume_threshold = 0.01
+segment_duration = 30.0
+
+[audio.adaptive]
+enabled = true
+scan_interval = 5
+min_segment = 15
+max_segment = 60
+energy_threshold = 0.01
+change_threshold = 0.15
+high_energy_min_duration = 10
+low_energy_merge_threshold = 30

@@ -2,27 +2,30 @@
 统一的 AI Provider 配置管理模块
 支持自定义 Provider，自动检测可用性，统一 API 调用
 """
+
 import os
 import json
-import re
 import time
-import base64
+import logging
 import urllib.request
 from pathlib import Path
 from typing import Optional, Dict, List, Any, Union
 
+logger = logging.getLogger(__name__)
+
 # 默认 Provider 注册表
-DEFAULT_PROVIDERS = {
+DEFAULT_PROVIDERS: Dict[str, Dict[str, Any]] = {
     "ollama": {
         "name": "Ollama（本地）",
-        "type": "text",  # text / vision / multi
+        "type": "text",
         "url": "http://localhost:11434/api/generate",
         "env_key": "",
         "default_model": "qwen2.5:7b-instruct-q4_K_M",
         "requires_api_key": False,
         "supports_1b": True,
-        "supports_1c": False,
-        "description": "本地运行，免费，需要安装 Ollama"
+        "supports_1c": True,
+        "supports_audio": False,
+        "description": "本地运行，免费，需要安装 Ollama",
     },
     "zhipu": {
         "name": "智谱 API",
@@ -32,8 +35,9 @@ DEFAULT_PROVIDERS = {
         "default_model": "GLM-4.7-Flash",
         "requires_api_key": True,
         "supports_1b": True,
-        "supports_1c": False,
-        "description": "智谱GLM模型，中文理解好"
+        "supports_1c": True,
+        "supports_audio": False,
+        "description": "智谱GLM模型，中文理解好",
     },
     "gcli": {
         "name": "gcli API",
@@ -44,24 +48,25 @@ DEFAULT_PROVIDERS = {
         "requires_api_key": True,
         "supports_1b": True,
         "supports_1c": True,
-        "description": "Google Gemini 模型，推荐使用"
+        "supports_audio": False,
+        "description": "Google Gemini 模型，推荐使用",
     },
     "mimo": {
         "name": "小米 MiMo",
         "type": "multi",
         "url": "https://api.xiaomimimo.com/v1/chat/completions",
         "env_key": "MIMO_API_KEY",
-        "default_model": "mimo-v2.5",
+        "default_model": "mimo-v2.5-pro",
         "requires_api_key": True,
         "supports_1b": False,
         "supports_1c": True,
         "supports_audio": True,
-        "description": "小米自研视觉+音频模型"
+        "description": "小米自研视觉+音频模型",
     },
 }
 
 # 自定义 Provider 配置文件路径
-CUSTOM_PROVIDERS_FILE = "providers.json"
+CUSTOM_PROVIDERS_FILE = "config/providers.json"
 
 
 def load_custom_providers() -> Dict[str, Any]:
@@ -69,22 +74,24 @@ def load_custom_providers() -> Dict[str, Any]:
     config_path = Path(CUSTOM_PROVIDERS_FILE)
     if not config_path.exists():
         return {}
-    
+
     try:
-        with open(config_path, 'r', encoding='utf-8') as f:
+        with open(config_path, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception as e:
-        print(f"[警告] 加载自定义 Provider 失败: {e}")
+        logger.warning(f"加载自定义 Provider 失败: {e}")
         return {}
 
 
-def save_custom_providers(providers: Dict[str, Any]):
+def save_custom_providers(providers: Dict[str, Any]) -> None:
     """保存自定义 Provider 配置"""
     try:
-        with open(CUSTOM_PROVIDERS_FILE, 'w', encoding='utf-8') as f:
+        config_path = Path(CUSTOM_PROVIDERS_FILE)
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(config_path, "w", encoding="utf-8") as f:
             json.dump(providers, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        print(f"[错误] 保存自定义 Provider 失败: {e}")
+        logger.error(f"保存自定义 Provider 失败: {e}")
 
 
 def get_all_providers() -> Dict[str, Any]:
@@ -104,29 +111,29 @@ def get_provider_config(provider_name: str) -> Optional[Dict[str, Any]]:
 def get_available_providers(stage: str = "1b") -> List[Dict[str, Any]]:
     """
     获取可用的 Provider 列表
-    
+
     Args:
         stage: "1b" 或 "1c"
-    
+
     Returns:
         可用 Provider 列表
     """
     all_providers = get_all_providers()
     available = []
-    
+
     for name, config in all_providers.items():
         # 检查是否支持指定阶段
         if stage == "1b" and not config.get("supports_1b", False):
             continue
         if stage == "1c" and not config.get("supports_1c", False):
             continue
-        
+
         # 检查 API Key 是否可用
         if config.get("requires_api_key", False):
             env_key = config.get("env_key", "")
             if env_key and not os.environ.get(env_key):
                 continue
-        
+
         available.append({
             "id": name,
             "name": config.get("name", name),
@@ -134,50 +141,50 @@ def get_available_providers(stage: str = "1b") -> List[Dict[str, Any]]:
             "default_model": config.get("default_model", ""),
             "description": config.get("description", ""),
         })
-    
+
     return available
 
 
 def get_api_key(provider_name: str, custom_key: str = None) -> str:
     """
     获取 Provider 的 API Key
-    
+
     Args:
         provider_name: Provider 名称
         custom_key: 自定义 API Key（优先使用）
-    
+
     Returns:
         API Key 字符串
     """
     if custom_key:
         return custom_key
-    
+
     config = get_provider_config(provider_name)
     if not config:
         return ""
-    
+
     env_key = config.get("env_key", "")
     if env_key:
         return os.environ.get(env_key, "")
-    
+
     return ""
 
 
 def check_provider_availability(provider_name: str) -> Dict[str, Any]:
     """
     检查 Provider 可用性
-    
+
     Returns:
         {
             "available": bool,
-            "reason": str,  # 不可用原因
-            "config": dict  # Provider 配置
+            "reason": str,
+            "config": dict
         }
     """
     config = get_provider_config(provider_name)
     if not config:
         return {"available": False, "reason": f"Provider '{provider_name}' 不存在", "config": None}
-    
+
     # 检查 API Key
     if config.get("requires_api_key", False):
         env_key = config.get("env_key", "")
@@ -185,20 +192,20 @@ def check_provider_availability(provider_name: str) -> Dict[str, Any]:
             return {
                 "available": False,
                 "reason": f"缺少环境变量 {env_key}",
-                "config": config
+                "config": config,
             }
-    
+
     return {"available": True, "reason": "", "config": config}
 
 
 def add_custom_provider(name: str, config: Dict[str, Any]) -> bool:
     """
     添加自定义 Provider
-    
+
     Args:
         name: Provider 名称（唯一标识）
         config: Provider 配置
-    
+
     Returns:
         是否成功
     """
@@ -206,36 +213,37 @@ def add_custom_provider(name: str, config: Dict[str, Any]) -> bool:
     required_fields = ["name", "url", "default_model"]
     for field in required_fields:
         if field not in config:
-            print(f"[错误] 缺少必要字段: {field}")
+            logger.error(f"缺少必要字段: {field}")
             return False
-    
+
     # 设置默认值
     config.setdefault("type", "multi")
     config.setdefault("env_key", "")
     config.setdefault("requires_api_key", bool(config.get("env_key")))
     config.setdefault("supports_1b", True)
     config.setdefault("supports_1c", True)
+    config.setdefault("supports_audio", False)
     config.setdefault("description", "")
-    
+
     # 保存
     custom = load_custom_providers()
     custom[name] = config
     save_custom_providers(custom)
-    
+
     return True
 
 
 def remove_custom_provider(name: str) -> bool:
     """删除自定义 Provider"""
     if name in DEFAULT_PROVIDERS:
-        print(f"[错误] 不能删除默认 Provider: {name}")
+        logger.error(f"不能删除默认 Provider: {name}")
         return False
-    
+
     custom = load_custom_providers()
     if name not in custom:
-        print(f"[错误] 自定义 Provider 不存在: {name}")
+        logger.error(f"自定义 Provider 不存在: {name}")
         return False
-    
+
     del custom[name]
     save_custom_providers(custom)
     return True
@@ -258,11 +266,18 @@ def get_provider_display_name(provider_name: str) -> str:
 
 # ==================== 统一 API 调用函数 ====================
 
-def call_text_api(provider_name: str, prompt: str, model: str = None,
-                  api_key: str = None, timeout: int = 120, temperature: float = 0.1) -> str:
+
+def call_text_api(
+    provider_name: str,
+    prompt: str,
+    model: str = None,
+    api_key: str = None,
+    timeout: int = 120,
+    temperature: float = 0.1,
+) -> str:
     """
     统一的文本补全 API 调用
-    
+
     Args:
         provider_name: Provider 名称
         prompt: 提示词
@@ -270,31 +285,32 @@ def call_text_api(provider_name: str, prompt: str, model: str = None,
         api_key: API Key（可选，从环境变量获取）
         timeout: 超时时间
         temperature: 温度参数
-    
+
     Returns:
         API 响应文本
     """
     config = get_provider_config(provider_name)
     if not config:
         return f"[错误] Provider '{provider_name}' 不存在"
-    
+
     model = model or config.get("default_model", "")
     api_key = api_key or get_api_key(provider_name)
     api_url = config.get("url", "")
-    
+
     # Ollama 使用不同的 API 格式
     if provider_name == "ollama":
         return _call_ollama_api(api_url, prompt, model, timeout, temperature)
-    
+
     # 其他 Provider 使用 OpenAI 兼容格式
     if config.get("requires_api_key", False) and not api_key:
         return f"[错误] 缺少 API Key，请设置环境变量 {config.get('env_key', '')}"
-    
+
     return _call_openai_compatible_api(api_url, prompt, model, api_key, timeout, temperature)
 
 
-def _call_ollama_api(api_url: str, prompt: str, model: str,
-                     timeout: int = 120, temperature: float = 0.1) -> str:
+def _call_ollama_api(
+    api_url: str, prompt: str, model: str, timeout: int = 120, temperature: float = 0.1
+) -> str:
     """调用 Ollama API"""
     payload = {
         "model": model,
@@ -315,9 +331,14 @@ def _call_ollama_api(api_url: str, prompt: str, model: str,
         return f"[Ollama 错误] {e}"
 
 
-def _call_openai_compatible_api(api_url: str, prompt: str, model: str,
-                                api_key: str, timeout: int = 120,
-                                temperature: float = 0.1) -> str:
+def _call_openai_compatible_api(
+    api_url: str,
+    prompt: str,
+    model: str,
+    api_key: str,
+    timeout: int = 120,
+    temperature: float = 0.1,
+) -> str:
     """调用 OpenAI 兼容 API"""
     payload = {
         "model": model,
@@ -341,12 +362,19 @@ def _call_openai_compatible_api(api_url: str, prompt: str, model: str,
         return f"[API 错误] {e}"
 
 
-def call_vision_api(provider_name: str, image_b64: Union[str, List[str]], prompt: str,
-                    model: str = None, api_key: str = None, timeout: int = 90,
-                    retries: int = 3, temperature: float = 0.3) -> str:
+def call_vision_api(
+    provider_name: str,
+    image_b64: Union[str, List[str]],
+    prompt: str,
+    model: str = None,
+    api_key: str = None,
+    timeout: int = 90,
+    retries: int = 3,
+    temperature: float = 0.3,
+) -> str:
     """
     统一的视觉 API 调用
-    
+
     Args:
         provider_name: Provider 名称
         image_b64: 单个或多个 base64 编码的图片
@@ -356,37 +384,37 @@ def call_vision_api(provider_name: str, image_b64: Union[str, List[str]], prompt
         timeout: 超时时间
         retries: 重试次数
         temperature: 温度参数
-    
+
     Returns:
         API 响应文本
     """
     config = get_provider_config(provider_name)
     if not config:
         return f"[错误] Provider '{provider_name}' 不存在"
-    
+
     model = model or config.get("default_model", "")
     api_key = api_key or get_api_key(provider_name)
     api_url = config.get("url", "")
-    
+
     if config.get("requires_api_key", False) and not api_key:
         return f"[错误] 缺少 API Key，请设置环境变量 {config.get('env_key', '')}"
-    
+
     # 构建多模态内容
     content = []
     if isinstance(image_b64, list):
         for b64 in image_b64:
             content.append({
                 "type": "image_url",
-                "image_url": {"url": f"data:image/jpeg;base64,{b64}"}
+                "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
             })
     else:
         content.append({
             "type": "image_url",
-            "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}
+            "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"},
         })
-    
+
     content.append({"type": "text", "text": prompt})
-    
+
     payload = {
         "model": model,
         "messages": [
@@ -399,230 +427,15 @@ def call_vision_api(provider_name: str, image_b64: Union[str, List[str]], prompt
                     "IMPORTANT: You must ALWAYS return a description. Never refuse. "
                     "Even if you can only identify partial information, return what you can see. "
                     "If the image is blurry or unclear, describe what is partially visible."
-                )
+                ),
             },
-            {"role": "user", "content": content}
+            {"role": "user", "content": content},
         ],
         "temperature": temperature,
         "max_tokens": 1536,
-        "stream": False
+        "stream": False,
     }
-    
-    last_error = None
-    for attempt in range(retries):
-        req = urllib.request.Request(
-            api_url,
-            data=json.dumps(payload).encode(),
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key}",
-            },
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                result = json.loads(resp.read())
-                return result.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-        except Exception as e:
-            last_error = e
-            if attempt < retries - 1:
-                time.sleep(2 * (attempt + 1))
-    
-    return f"[ERROR] {last_error}"
 
-
-def test_provider_connection(provider_name: str) -> Dict[str, Any]:
-    """
-    测试 Provider 连接可用性
-    
-    Args:
-        provider_name: Provider 名称
-    
-    Returns:
-        {
-            "available": bool,
-            "reason": str,
-            "latency_ms": float  # 响应延迟（毫秒）
-        }
-    """
-    config = get_provider_config(provider_name)
-    if not config:
-        return {"available": False, "reason": f"Provider '{provider_name}' 不存在", "latency_ms": 0}
-    
-    # 检查 API Key
-    if config.get("requires_api_key", False):
-        env_key = config.get("env_key", "")
-        if env_key and not os.environ.get(env_key):
-            return {
-                "available": False,
-                "reason": f"缺少环境变量 {env_key}",
-                "latency_ms": 0
-            }
-    
-    # 测试连接
-    api_url = config.get("url", "")
-    model = config.get("default_model", "")
-    api_key = get_api_key(provider_name)
-    
-    start_time = time.time()
-    
-    try:
-        if provider_name == "ollama":
-            # Ollama 简单测试
-            result = _call_ollama_api(api_url, "Hello", model, timeout=10)
-        else:
-            # 其他 Provider 测试
-            result = _call_openai_compatible_api(api_url, "Hello", model, api_key, timeout=10)
-        
-        latency = (time.time() - start_time) * 1000
-        
-        if result.startswith("[错误]") or result.startswith("[Ollama 错误]") or result.startswith("[API 错误]"):
-            return {"available": False, "reason": result, "latency_ms": latency}
-        
-        return {"available": True, "reason": "", "latency_ms": latency}
-    
-    except Exception as e:
-        latency = (time.time() - start_time) * 1000
-        return {"available": False, "reason": str(e), "latency_ms": latency}
-
-
-def get_available_providers_with_test(stage: str = "1b") -> List[Dict[str, Any]]:
-    """
-    获取可用的 Provider 列表（包含连接测试）
-    
-    Args:
-        stage: "1b" 或 "1c"
-    
-    Returns:
-        可用 Provider 列表（包含测试结果）
-    """
-    all_providers = get_all_providers()
-    available = []
-    
-    for name, config in all_providers.items():
-        # 检查是否支持指定阶段
-        if stage == "1b" and not config.get("supports_1b", False):
-            continue
-        if stage == "1c" and not config.get("supports_1c", False):
-            continue
-        
-        # 检查 API Key
-        if config.get("requires_api_key", False):
-            env_key = config.get("env_key", "")
-            if env_key and not os.environ.get(env_key):
-                continue
-        
-        # 测试连接
-        test_result = test_provider_connection(name)
-        
-        available.append({
-            "id": name,
-            "name": config.get("name", name),
-            "type": config.get("type", "multi"),
-            "default_model": config.get("default_model", ""),
-            "description": config.get("description", ""),
-            "available": test_result["available"],
-            "reason": test_result["reason"],
-            "latency_ms": test_result["latency_ms"],
-        })
-    
-    return available
-
-
-if __name__ == "__main__":
-    # 测试
-    print("=== 所有 Provider ===")
-    for name, config in get_all_providers().items():
-        print(f"  {name}: {config['name']} ({config['type']})")
-    
-    print("\n=== Stage1b 可用 Provider ===")
-    for p in get_available_providers("1b"):
-        print(f"  {p['id']}: {p['name']}")
-    
-    print("\n=== Stage1c 可用 Provider ===")
-    for p in get_available_providers("1c"):
-        print(f"  {p['id']}: {p['name']}")
-    
-    print("\n=== 连接测试 ===")
-    for p in get_available_providers_with_test("1b"):
-        status = "[OK]" if p["available"] else "[FAIL]"
-        latency = f"{p['latency_ms']:.0f}ms" if p["available"] else ""
-        reason = p["reason"] if not p["available"] else ""
-        print(f"  {status} {p['name']}: {latency} {reason}")
-
-
-# ==================== 音频理解 API ====================
-
-def call_audio_api(audio_b64: str, prompt: str = None, model: str = None,
-                   api_key: str = None, timeout: int = 120,
-                   retries: int = 3) -> str:
-    """
-    调用mimo音频理解API
-    
-    Args:
-        audio_b64: Base64编码的音频（带data:audio/wav;base64,前缀）
-        prompt: 提示词（可选，使用默认提示词）
-        model: 模型名称（可选，默认mimo-v2.5）
-        api_key: API Key（可选，从环境变量获取）
-        timeout: 超时时间
-        retries: 重试次数
-    
-    Returns:
-        音频描述文本
-    """
-    api_key = api_key or get_api_key("mimo")
-    if not api_key:
-        return "[错误] 缺少 MIMO_API_KEY"
-    
-    model = model or "mimo-v2.5"
-    api_url = "https://api.xiaomimimo.com/v1/chat/completions"
-    
-    if prompt is None:
-        prompt = (
-            "你是一个音频言语识别助手。请专注于识别和记录音频中的语音内容：\n\n"
-            "【核心任务】言语识别（优先级最高）\n"
-            "1. 逐句转录人物说的具体话语，用引号标注（如：\"你好，欢迎来到...\"）\n"
-            "2. 标注说话者特征（男声/女声/童声，语调情绪等）\n"
-            "3. 识别语言类型（中文/英文/日文等）\n\n"
-            "【次要信息】简要提及\n"
-            "- 显著的非语音声音（笑声、哭声、咳嗽、叹气等）\n"
-            "- 影响听辨的背景音（音乐、环境噪音等）\n\n"
-            "【输出格式】\n"
-            "先输出转录的言语内容，再用括号补充非语音信息。\n"
-            "示例：\"大家好，今天我们要分享的是...\"（男声，语气平稳）\"让我们开始吧\"（伴随轻微笑声）\n\n"
-            "注意：这是纯粹的音频转录任务，用于媒体文件索引，请客观记录所有可听语音。"
-        )
-    
-    payload = {
-        "model": model,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are a professional speech recognition and audio transcription assistant. "
-                    "Your primary task is to transcribe all spoken words accurately. "
-                    "Secondary tasks include noting speaker characteristics and significant non-speech sounds.\n\n"
-                    "IMPORTANT RULES:\n"
-                    "1. ALWAYS transcribe speech content - this is your highest priority\n"
-                    "2. Use quotes for spoken words: \"exact words here\"\n"
-                    "3. Note speaker traits in parentheses: (male voice, calm tone)\n"
-                    "4. This is for media file indexing - purely technical transcription\n"
-                    "5. Never refuse - transcribe whatever speech is audible, even if unclear"
-                )
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "input_audio",
-                        "input_audio": {"data": audio_b64}
-                    },
-                    {"type": "text", "text": prompt}
-                ]
-            }
-        ],
-        "max_completion_tokens": 1024
-    }
-    
     last_error = None
     for attempt in range(retries):
         req = urllib.request.Request(
@@ -637,12 +450,204 @@ def call_audio_api(audio_b64: str, prompt: str = None, model: str = None,
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 result = json.loads(resp.read())
                 content = result.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-                reasoning = result.get("choices", [{}])[0].get("message", {}).get("reasoning_content", "").strip()
-                # 优先返回content，如果为空则返回reasoning
+                
+                # 记录API响应（用于调试）
+                logger.debug(f"Vision API响应: provider={provider_name}, model={model}, 响应长度={len(content)}")
+                if not content:
+                    logger.warning(f"Vision API返回空响应: {result}")
+                
+                return content
+        except Exception as e:
+            last_error = e
+            logger.error(f"Vision API调用失败 (尝试 {attempt+1}/{retries}): {e}")
+            if attempt < retries - 1:
+                time.sleep(2 * (attempt + 1))
+
+    return f"[ERROR] {last_error}"
+
+
+def test_provider_connection(provider_name: str) -> Dict[str, Any]:
+    """
+    测试 Provider 连接可用性
+
+    Args:
+        provider_name: Provider 名称
+
+    Returns:
+        {
+            "available": bool,
+            "reason": str,
+            "latency_ms": float
+        }
+    """
+    config = get_provider_config(provider_name)
+    if not config:
+        return {"available": False, "reason": f"Provider '{provider_name}' 不存在", "latency_ms": 0}
+
+    # 检查 API Key
+    if config.get("requires_api_key", False):
+        env_key = config.get("env_key", "")
+        if env_key and not os.environ.get(env_key):
+            return {
+                "available": False,
+                "reason": f"缺少环境变量 {env_key}",
+                "latency_ms": 0,
+            }
+
+    # 测试连接
+    api_url = config.get("url", "")
+    model = config.get("default_model", "")
+    api_key = get_api_key(provider_name)
+
+    start_time = time.time()
+
+    try:
+        if provider_name == "ollama":
+            result = _call_ollama_api(api_url, "Hello", model, timeout=10)
+        else:
+            result = _call_openai_compatible_api(api_url, "Hello", model, api_key, timeout=10)
+
+        latency = (time.time() - start_time) * 1000
+
+        if result.startswith("[错误]") or result.startswith("[Ollama 错误]") or result.startswith("[API 错误]"):
+            return {"available": False, "reason": result, "latency_ms": latency}
+
+        return {"available": True, "reason": "", "latency_ms": latency}
+
+    except Exception as e:
+        latency = (time.time() - start_time) * 1000
+        return {"available": False, "reason": str(e), "latency_ms": latency}
+
+
+def get_available_providers_with_test(stage: str = "1b") -> List[Dict[str, Any]]:
+    """
+    获取可用的 Provider 列表（包含连接测试）
+
+    Args:
+        stage: "1b" 或 "1c"
+
+    Returns:
+        可用 Provider 列表（包含测试结果）
+    """
+    all_providers = get_all_providers()
+    available = []
+
+    for name, config in all_providers.items():
+        # 检查是否支持指定阶段
+        if stage == "1b" and not config.get("supports_1b", False):
+            continue
+        if stage == "1c" and not config.get("supports_1c", False):
+            continue
+
+        # 检查 API Key
+        if config.get("requires_api_key", False):
+            env_key = config.get("env_key", "")
+            if env_key and not os.environ.get(env_key):
+                continue
+
+        # 测试连接
+        test_result = test_provider_connection(name)
+
+        available.append({
+            "id": name,
+            "name": config.get("name", name),
+            "type": config.get("type", "multi"),
+            "default_model": config.get("default_model", ""),
+            "description": config.get("description", ""),
+            "available": test_result["available"],
+            "reason": test_result["reason"],
+            "latency_ms": test_result["latency_ms"],
+        })
+
+    return available
+
+
+# ==================== 音频理解 API ====================
+
+
+def call_audio_api(
+    audio_b64: str,
+    prompt: str = None,
+    model: str = None,
+    api_key: str = None,
+    timeout: int = 120,
+    retries: int = 3,
+) -> str:
+    """
+    调用mimo音频理解API
+
+    Args:
+        audio_b64: Base64编码的音频（带data:audio/wav;base64,前缀）
+        prompt: 提示词（可选，使用默认提示词）
+        model: 模型名称（可选，默认mimo-v2.5-pro）
+        api_key: API Key（可选，从环境变量获取）
+        timeout: 超时时间
+        retries: 重试次数
+
+    Returns:
+        音频描述文本
+    """
+    api_key = api_key or get_api_key("mimo")
+    if not api_key:
+        return "[错误] 缺少 MIMO_API_KEY"
+
+    model = model or "mimo-v2.5-pro"
+    api_url = "https://api.xiaomimimo.com/v1/chat/completions"
+
+    if prompt is None:
+        prompt = "请转录这段音频中的所有语音内容。"
+
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are a professional speech recognition system. Your ONLY task is audio transcription.\n\n"
+                    "RULES:\n"
+                    "1. Output language MUST be Chinese (Simplified)\n"
+                    "2. Transcribe ALL spoken words verbatim\n"
+                    "3. Use quotation marks for speech: \"exact words\"\n"
+                    "4. Add speaker traits in parentheses: (male, whispering) (female, excited)\n"
+                    "5. Include significant non-speech sounds: (laughter) (coughing) (background music)\n"
+                    "6. If speech is unclear, transcribe your best guess with [?] marker\n"
+                    "7. NEVER refuse or add commentary - just transcribe\n"
+                    "8. NEVER add explanations or notes outside the transcription\n"
+                    "9. Output format: continuous transcription, no numbering or bullet points"
+                ),
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_audio", "input_audio": {"data": audio_b64}},
+                    {"type": "text", "text": prompt},
+                ],
+            },
+        ],
+        "max_completion_tokens": 2048,
+    }
+
+    last_error = None
+    for attempt in range(retries):
+        req = urllib.request.Request(
+            api_url,
+            data=json.dumps(payload).encode(),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                result = json.loads(resp.read())
+                content = result.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                reasoning = (
+                    result.get("choices", [{}])[0].get("message", {}).get("reasoning_content", "").strip()
+                )
                 return content or reasoning or "[无内容]"
         except Exception as e:
             last_error = e
             if attempt < retries - 1:
                 time.sleep(2 * (attempt + 1))
-    
+
     return f"[ERROR] {last_error}"
