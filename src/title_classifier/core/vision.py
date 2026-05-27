@@ -84,7 +84,7 @@ class VisionProcessor:
 
         return True
 
-    def process_video(self, video_path: str, title: str, audio_context: str = "") -> Dict:
+    def process_video(self, video_path: str, title: str, audio_context: str = "", subtitle_segments: List[Dict] = None) -> Dict:
         """处理视频 - 全面分析模式"""
         duration = get_video_duration(video_path)
         logger.info(f"视频模式: {title[:30]} (时长: {duration:.1f}s)")
@@ -94,12 +94,12 @@ class VisionProcessor:
 
         if self.use_yolo and self.yolo_detector:
             # YOLO全面分析模式
-            return self._process_video_comprehensive(video_path, title, duration, audio_context)
+            return self._process_video_comprehensive(video_path, title, duration, audio_context, subtitle_segments)
         else:
             # 传统模式
             return self._process_video_traditional(video_path, title, duration, audio_context)
 
-    def _process_video_comprehensive(self, video_path: str, title: str, duration: float, audio_context: str = "") -> Dict:
+    def _process_video_comprehensive(self, video_path: str, title: str, duration: float, audio_context: str = "", subtitle_segments: List[Dict] = None) -> Dict:
         """视频全面分析"""
         logger.info(f"启动YOLO全面分析模式，采样间隔: {self.analysis_step}秒")
 
@@ -137,7 +137,17 @@ class VisionProcessor:
             video_summary, frame_descriptions, len(selected_indices)
         )
 
-        # 6. 调用VLM（传入音频上下文）
+        # 5.5 构建每帧对应的字幕上下文
+        per_frame_subtitle = ""
+        if subtitle_segments:
+            frame_timestamps = [
+                video_analysis["timeline"][i]["timestamp"]
+                for i in selected_indices
+                if i < len(video_analysis["timeline"])
+            ]
+            per_frame_subtitle = self._build_per_frame_subtitle_context(frame_timestamps, subtitle_segments)
+
+        # 6. 调用VLM（传入音频上下文和每帧字幕）
         frames_for_vlm = [selected_frames[i] for i in selected_indices if i < len(selected_frames)]
         logger.info(f"调用VLM: {len(frames_for_vlm)}帧")
         
@@ -146,7 +156,7 @@ class VisionProcessor:
             self._save_detection_debug(video_analysis, debug_subdir)
 
         # 构建prompt（用于调试）
-        prompt = self._build_comprehensive_prompt(title, len(frames_for_vlm), comprehensive_context, audio_context)
+        prompt = self._build_comprehensive_prompt(title, len(frames_for_vlm), comprehensive_context, audio_context, per_frame_subtitle)
 
         # 保存调试数据 - VLM输入帧和prompt
         if debug_subdir:
@@ -156,7 +166,8 @@ class VisionProcessor:
             frames_for_vlm,
             title,
             comprehensive_context,
-            audio_context
+            audio_context,
+            per_frame_subtitle,
         )
 
         logger.info(f"VLM结果: 描述='{result.get('description', '')[:50]}...', 关键词='{result.get('keywords', '')[:50]}...'")
@@ -468,9 +479,9 @@ class VisionProcessor:
 
         return "\n".join(context_lines)
 
-    def _call_vlm_comprehensive(self, frames: List[str], title: str, context: str, audio_context: str = "") -> Dict:
+    def _call_vlm_comprehensive(self, frames: List[str], title: str, context: str, audio_context: str = "", per_frame_subtitle: str = "") -> Dict:
         """调用VLM - 全面分析模式"""
-        prompt = self._build_comprehensive_prompt(title, len(frames), context, audio_context)
+        prompt = self._build_comprehensive_prompt(title, len(frames), context, audio_context, per_frame_subtitle)
 
         if len(frames) > 1:
             images_b64 = [image_to_base64(f, max_size=self.max_image_size) for f in frames]
@@ -576,7 +587,7 @@ class VisionProcessor:
 
         logger.info(f"调试汇总已保存")
 
-    def _build_comprehensive_prompt(self, title: str, n_frames: int, context: str, audio_context: str = "") -> str:
+    def _build_comprehensive_prompt(self, title: str, n_frames: int, context: str, audio_context: str = "", per_frame_subtitle: str = "") -> str:
         """构建全面分析提示词"""
         
         # 构建音频上下文部分
@@ -587,10 +598,20 @@ class VisionProcessor:
 【音频转录】
 {audio_context}"""
 
+        # 构建每帧对应的字幕上下文
+        subtitle_section = ""
+        if per_frame_subtitle:
+            subtitle_section = f"""
+
+【各帧对应音频转录时间段】
+{per_frame_subtitle}
+（如果某帧无对应字幕，说明该时间段没有语音内容）"""
+
         return f"""分析媒体文件 "{title}" 的{n_frames}个关键帧。
 
 {context}
 {audio_section}
+{subtitle_section}
 
 【任务说明】
 这是一个媒体文件管理任务，需要对视频/图片进行客观的技术分析和元数据提取，用于文件归类和检索系统。
@@ -984,15 +1005,18 @@ class VisionProcessor:
         # 检查是否已有音频SRT
         audio_srt_path = self._find_audio_srt(original_title, srt_output_dir)
         audio_context = ""
+        subtitle_segments = []
         
         if audio_srt_path:
             # 读取音频转录内容
             audio_context = self._read_audio_transcription(audio_srt_path)
+            # 解析带时间戳的字幕段
+            subtitle_segments = self._parse_audio_srt_with_timestamps(audio_srt_path)
             logger.info(f"检测到音频SRT，将作为VLM上下文: {audio_srt_path}")
-            logger.info(f"音频上下文长度: {len(audio_context)} 字符")
+            logger.info(f"音频上下文长度: {len(audio_context)} 字符, 字幕段数: {len(subtitle_segments)}")
 
-        # 处理视频（传入音频上下文）
-        result = self.process_video(video_path, title, audio_context)
+        # 处理视频（传入音频上下文和字幕段）
+        result = self.process_video(video_path, title, audio_context, subtitle_segments)
 
         if "error" in result:
             return result
@@ -1088,6 +1112,100 @@ class VisionProcessor:
         except Exception as e:
             logger.error(f"读取音频SRT失败: {e}")
             return ""
+
+    def _parse_audio_srt_with_timestamps(self, srt_path: str) -> List[Dict]:
+        """
+        解析SRT文件，返回带时间戳的字幕段列表
+        
+        Args:
+            srt_path: SRT文件路径
+        
+        Returns:
+            字幕段列表: [{"start": 秒数, "end": 秒数, "text": 文本}, ...]
+        """
+        import re
+        segments = []
+        try:
+            with open(srt_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            
+            # 按空行分割字幕块
+            blocks = re.split(r'\n\s*\n', content.strip())
+            
+            for block in blocks:
+                lines = block.strip().split('\n')
+                if len(lines) < 3:
+                    continue
+                
+                # 解析时间戳行
+                time_match = re.match(
+                    r'(\d{2}):(\d{2}):(\d{2}),(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2}),(\d{3})',
+                    lines[1].strip()
+                )
+                if not time_match:
+                    continue
+                
+                g = time_match.groups()
+                start = int(g[0])*3600 + int(g[1])*60 + int(g[2]) + int(g[3])/1000
+                end = int(g[4])*3600 + int(g[5])*60 + int(g[6]) + int(g[7])/1000
+                
+                text = '\n'.join(lines[2:]).strip()
+                if text:
+                    segments.append({"start": start, "end": end, "text": text})
+            
+            return segments
+            
+        except Exception as e:
+            logger.error(f"解析SRT时间戳失败: {e}")
+            return []
+
+    def _match_frame_to_subtitles(self, frame_timestamp: float, subtitle_segments: List[Dict]) -> Optional[Dict]:
+        """
+        将帧时间戳匹配到字幕段
+        
+        Args:
+            frame_timestamp: 帧时间戳（秒）
+            subtitle_segments: 字幕段列表
+        
+        Returns:
+            匹配的字幕段，如果无匹配返回None
+        """
+        for seg in subtitle_segments:
+            if seg["start"] <= frame_timestamp <= seg["end"]:
+                return seg
+        return None
+
+    def _build_per_frame_subtitle_context(
+        self, frame_timestamps: List[float], subtitle_segments: List[Dict]
+    ) -> str:
+        """
+        构建每帧对应的字幕上下文
+        
+        Args:
+            frame_timestamps: 各帧时间戳列表
+            subtitle_segments: 字幕段列表
+        
+        Returns:
+            格式化的每帧字幕上下文字符串
+        """
+        if not subtitle_segments:
+            return ""
+        
+        lines = []
+        for i, ts in enumerate(frame_timestamps, 1):
+            seg = self._match_frame_to_subtitles(ts, subtitle_segments)
+            if seg:
+                # 格式化时间戳为 HH:MM:SS
+                def fmt_time(s):
+                    h = int(s // 3600)
+                    m = int((s % 3600) // 60)
+                    sec = int(s % 60)
+                    return f"{h:02d}:{m:02d}:{sec:02d}"
+                lines.append(f"- 图{i}@{ts:.1f}s: [{fmt_time(seg['start'])} --> {fmt_time(seg['end'])}] {seg['text']}")
+            else:
+                lines.append(f"- 图{i}@{ts:.1f}s: (无对应字幕)")
+        
+        return "\n".join(lines)
 
     def _rename_and_update_srt(
         self,
