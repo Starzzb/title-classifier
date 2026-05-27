@@ -76,6 +76,13 @@ def cmd_vision(args):
     # 加载环境变量
     load_env(Path.cwd() / ".env")
 
+    # 调试目录
+    debug_dir = None
+    if args.debug:
+        debug_dir = args.debug_dir
+        Path(debug_dir).mkdir(parents=True, exist_ok=True)
+        print(f"[调试模式] 调试数据将保存到: {debug_dir}")
+
     # 初始化处理器（YOLO模式固定使用pose模型）
     processor = VisionProcessor(
         provider=args.provider,
@@ -87,6 +94,7 @@ def cmd_vision(args):
         max_image_size=args.max_image_size,
         vlm_frames=args.vlm_frames,
         analysis_step=args.analysis_step,
+        debug_dir=debug_dir,
     )
 
     if not processor.initialize():
@@ -182,6 +190,10 @@ def cmd_vision(args):
             print(f"  [完成] {elapsed:.1f}秒")
             print(f"  关键词: {result.get('keywords', '')[:60]}")
             print(f"  final_name: {result.get('final_name', '')[:60]}")
+
+            # 输出调试目录
+            if args.debug and result.get("debug_dir"):
+                print(f"  [调试] 数据已保存: {result['debug_dir']}")
 
             success += 1
 
@@ -358,8 +370,8 @@ def main():
     subparsers = parser.add_subparsers(dest="command", help="可用命令")
 
     # scan 命令
-    scan_cmd = subparsers.add_parser("scan", help="扫描目录")
-    scan_cmd.add_argument("-d", "--dir", required=True, help="目标目录")
+    scan_cmd = subparsers.add_parser("scan", help="扫描目录或单个文件")
+    scan_cmd.add_argument("-d", "--dir", required=True, help="目标目录或单个媒体文件路径")
     scan_cmd.add_argument("-o", "--output", help="输出文件路径")
     scan_cmd.add_argument("--output-dir", default="data/output", help="输出目录")
     scan_cmd.add_argument("-a", "--append", action="store_true", help="追加模式")
@@ -386,6 +398,8 @@ def main():
     vision_cmd.add_argument("--analysis-step", type=float, default=2.0, help="YOLO模式采样间隔（秒，默认2秒）")
     vision_cmd.add_argument("--audio", action="store_true", help="生成音频字幕（追加到SRT文件）")
     vision_cmd.add_argument("--all", action="store_true", help="处理所有未识别的文件")
+    vision_cmd.add_argument("--debug", action="store_true", help="启用调试模式，保存检测结果和VLM输入输出")
+    vision_cmd.add_argument("--debug-dir", default="data/debug", help="调试数据输出目录")
     vision_cmd.set_defaults(func=cmd_vision)
 
     # audio 命令

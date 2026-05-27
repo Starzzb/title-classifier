@@ -71,16 +71,66 @@ class Renamer:
             # 执行重命名
             if dry_run:
                 logger.info(f"[模拟] {original_path.name} -> {new_path.name}")
+                # 模拟SRT重命名
+                self._rename_srt(original_path, new_path, dry_run=True)
             else:
                 try:
                     original_path.rename(new_path)
                     logger.info(f"[重命名] {original_path.name} -> {new_path.name}")
                     stats["success"] += 1
+                    # 同步重命名SRT文件
+                    self._rename_srt(original_path, new_path, dry_run=False)
                 except Exception as e:
                     logger.error(f"重命名失败: {e}")
                     stats["error"] += 1
 
         return stats
+
+    def _rename_srt(self, original_path: Path, new_path: Path, dry_run: bool = False):
+        """
+        同步重命名SRT字幕文件
+        
+        Args:
+            original_path: 原视频路径
+            new_path: 新视频路径
+            dry_run: 是否模拟运行
+        """
+        # 查找同名SRT文件（在视频目录和subtitles目录）
+        original_stem = original_path.stem
+        new_stem = new_path.stem
+        
+        # 可能的SRT位置
+        srt_locations = [
+            original_path.parent,  # 视频同目录
+            Path("data/output/subtitles"),  # subtitles目录
+        ]
+        
+        for srt_dir in srt_locations:
+            if not srt_dir.exists():
+                continue
+                
+            # 查找匹配的SRT文件
+            for srt_file in srt_dir.glob(f"{original_stem}*.srt"):
+                # 构建新SRT文件名
+                new_srt_name = srt_file.name.replace(original_stem, new_stem, 1)
+                new_srt_path = srt_file.parent / new_srt_name
+                
+                if dry_run:
+                    logger.info(f"[模拟] SRT: {srt_file.name} -> {new_srt_name}")
+                else:
+                    try:
+                        if new_srt_path.exists():
+                            # 如果目标已存在，添加序号
+                            counter = 1
+                            while new_srt_path.exists():
+                                new_srt_name = f"{new_stem}_{counter}.srt"
+                                new_srt_path = srt_file.parent / new_srt_name
+                                counter += 1
+                        
+                        srt_file.rename(new_srt_path)
+                        logger.info(f"[SRT重命名] {srt_file.name} -> {new_srt_name}")
+                    except Exception as e:
+                        logger.warning(f"SRT重命名失败: {e}")
 
     def _read_csv(self) -> List[Dict]:
         """读取CSV文件"""

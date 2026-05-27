@@ -159,6 +159,27 @@ class UHDDetector(BaseDetector):
             return {"has_person": False, "persons": [], "max_confidence": 0.0}
 
 
+def draw_detection_on_frame(frame: np.ndarray, detection_result: Dict) -> np.ndarray:
+    """在帧上绘制UHD检测结果"""
+    annotated = frame.copy()
+
+    if not detection_result.get("has_person") or not detection_result.get("persons"):
+        return annotated
+
+    for person in detection_result["persons"]:
+        bbox_pixel = person.get("bbox_pixel", [])
+        conf = person.get("confidence", 0)
+
+        if len(bbox_pixel) == 4:
+            x1, y1, x2, y2 = [int(v) for v in bbox_pixel]
+            color = (0, 255, 0)
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(annotated, f"Person {conf:.2f}", (x1, y1 - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+
+    return annotated
+
+
 # 保持向后兼容的函数接口
 def load_model(model_path: str = None) -> ort.InferenceSession:
     """加载模型（向后兼容）"""

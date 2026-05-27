@@ -28,7 +28,7 @@ top_keywords = 5
 
 [vision]
 max_image_size = 800
-vlm_frames = 5
+vlm_frames = 10
 clip_frames = 5
 max_keyframes = 8
 keyframe_threshold = 30.0
@@ -50,18 +50,40 @@ batch_size = 3
 delay = 2.0
 
 [audio]
-enabled = false
+enabled = true
 provider = "mimo"
 skip_silence = true
 volume_threshold = 0.01
 segment_duration = 30.0
 
 [audio.adaptive]
-enabled = true
-scan_interval = 5
+enabled = false
 min_segment = 15
 max_segment = 60
-energy_threshold = 0.01
-change_threshold = 0.15
-high_energy_min_duration = 10
-low_energy_merge_threshold = 30
+low_energy_merge_threshold = 15
+enter_threshold = 0.15
+exit_threshold = 0.08
+hangover_frames = 5
+noise_alpha = 0.95
+zcr_noise_threshold = 0.4
+centroid_min_hz = 200
+centroid_max_hz = 4000
+entropy_threshold = 0.8
+
+[audio.vad]
+enabled = true
+min_speech_ms = 150
+min_silence_ms = 80
+merge_gap = 0.8
+min_keep_duration = 1.0
+max_chunk = 25.0
+long_gap = 2.0
+min_duration = 1.0
+min_speech_ratio = 0.4
+
+[audio.postprocess]
+enabled = false
+max_subtitle_duration = 10
+max_subtitle_chars = 100
+filter_invalid = true
+format_text = true

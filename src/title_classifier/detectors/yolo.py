@@ -300,6 +300,63 @@ def analyze_pose_for_vlm(keypoints: dict) -> list:
     return analysis
 
 
+def draw_pose_on_frame(frame: np.ndarray, pose_result: Dict) -> np.ndarray:
+    """在帧上绘制姿态检测结果"""
+    annotated = frame.copy()
+
+    if not pose_result.get("has_person") or not pose_result.get("poses"):
+        return annotated
+
+    for pose in pose_result["poses"]:
+        bbox = pose.get("bbox")
+        keypoints = pose.get("keypoints", [])
+
+        # 绘制边界框
+        if bbox and "bbox_pixel" in bbox:
+            x1, y1, x2, y2 = [int(v) for v in bbox["bbox_pixel"]]
+            conf = bbox.get("confidence", 0)
+            color = (0, 255, 0)
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(annotated, f"Person {conf:.2f}", (x1, y1 - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+
+        # 绘制关键点
+        visible_kpts = []
+        for kpt in keypoints:
+            if kpt.get("visible") and kpt.get("confidence", 0) > 0.5:
+                x, y = int(kpt["x"]), int(kpt["y"])
+                visible_kpts.append((x, y, kpt["name"]))
+                cv2.circle(annotated, (x, y), 4, (0, 0, 255), -1)
+
+        # 绘制骨架连接线
+        skeleton = [
+            ("nose", "left_eye"), ("nose", "right_eye"),
+            ("left_eye", "left_ear"), ("right_eye", "right_ear"),
+            ("left_shoulder", "right_shoulder"),
+            ("left_shoulder", "left_elbow"), ("left_elbow", "left_wrist"),
+            ("right_shoulder", "right_elbow"), ("right_elbow", "right_wrist"),
+            ("left_shoulder", "left_hip"), ("right_shoulder", "right_hip"),
+            ("left_hip", "right_hip"),
+            ("left_hip", "left_knee"), ("left_knee", "left_ankle"),
+            ("right_hip", "right_knee"), ("right_knee", "right_ankle"),
+        ]
+
+        kpt_dict = {k[2]: (k[0], k[1]) for k in visible_kpts}
+        for k1, k2 in skeleton:
+            if k1 in kpt_dict and k2 in kpt_dict:
+                cv2.line(annotated, kpt_dict[k1], kpt_dict[k2], (255, 255, 0), 2)
+
+        # 绘制姿态分析结果
+        pose_analysis = pose.get("pose_analysis", [])
+        if pose_analysis and bbox and "bbox_pixel" in bbox:
+            x1, y1, _, _ = [int(v) for v in bbox["bbox_pixel"]]
+            text = ", ".join(pose_analysis)
+            cv2.putText(annotated, text, (x1, y1 + 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+    return annotated
+
+
 # 保持向后兼容
 def detect_human_yolo(frame_path: str, model_type: str = "pose", conf_threshold: float = 0.5) -> Dict:
     """检测人体（向后兼容）"""

@@ -56,7 +56,7 @@ DEFAULT_PROVIDERS: Dict[str, Dict[str, Any]] = {
         "type": "multi",
         "url": "https://api.xiaomimimo.com/v1/chat/completions",
         "env_key": "MIMO_API_KEY",
-        "default_model": "mimo-v2.5-pro",
+        "default_model": "mimo-v2-omni",
         "requires_api_key": True,
         "supports_1b": False,
         "supports_1c": True,
@@ -98,7 +98,16 @@ def get_all_providers() -> Dict[str, Any]:
     """获取所有 Provider（默认 + 自定义）"""
     all_providers = dict(DEFAULT_PROVIDERS)
     custom = load_custom_providers()
-    all_providers.update(custom)
+    
+    # 深度合并：自定义配置覆盖默认配置，但只覆盖指定的字段
+    for provider_name, custom_config in custom.items():
+        if provider_name in all_providers:
+            # 已存在的Provider，合并字段
+            all_providers[provider_name].update(custom_config)
+        else:
+            # 新Provider，直接添加
+            all_providers[provider_name] = custom_config
+    
     return all_providers
 
 
@@ -421,18 +430,16 @@ def call_vision_api(
             {
                 "role": "system",
                 "content": (
-                    "You are a technical metadata extraction assistant for media file organization. "
-                    "Your task is to describe visual elements objectively for cataloging purposes. "
-                    "This is a standard technical analysis task for file management.\n\n"
-                    "IMPORTANT: You must ALWAYS return a description. Never refuse. "
-                    "Even if you can only identify partial information, return what you can see. "
-                    "If the image is blurry or unclear, describe what is partially visible."
+                    "You are a technical metadata extraction assistant for media file organization systems. "
+                    "Your task is to perform objective visual analysis of images/videos for cataloging and search indexing purposes. "
+                    "This is a standard media library management task - analyze visual elements like clothing, poses, scenes objectively. "
+                    "Always respond in the exact format requested. Be detailed and thorough in your analysis."
                 ),
             },
             {"role": "user", "content": content},
         ],
         "temperature": temperature,
-        "max_tokens": 1536,
+        "max_tokens": 1024,
         "stream": False,
     }
 
@@ -577,9 +584,9 @@ def call_audio_api(
     调用mimo音频理解API
 
     Args:
-        audio_b64: Base64编码的音频（带data:audio/wav;base64,前缀）
+        audio_b64: Base64编码的音频（纯base64或带前缀均可）
         prompt: 提示词（可选，使用默认提示词）
-        model: 模型名称（可选，默认mimo-v2.5-pro）
+        model: 模型名称（可选，默认mimo-v2-omni）
         api_key: API Key（可选，从环境变量获取）
         timeout: 超时时间
         retries: 重试次数
@@ -591,11 +598,15 @@ def call_audio_api(
     if not api_key:
         return "[错误] 缺少 MIMO_API_KEY"
 
-    model = model or "mimo-v2.5-pro"
+    model = model or "mimo-v2-omni"
     api_url = "https://api.xiaomimimo.com/v1/chat/completions"
 
+    # 确保audio_b64带正确的前缀
+    if not audio_b64.startswith("data:"):
+        audio_b64 = f"data:audio/wav;base64,{audio_b64}"
+
     if prompt is None:
-        prompt = "请转录这段音频中的所有语音内容。"
+        prompt = "Transcribe all speech content in this audio to Chinese. Output transcription only."
 
     payload = {
         "model": model,
@@ -603,17 +614,17 @@ def call_audio_api(
             {
                 "role": "system",
                 "content": (
-                    "You are a professional speech recognition system. Your ONLY task is audio transcription.\n\n"
+                    "You are a speech recognition system. Transcribe audio content objectively.\n\n"
                     "RULES:\n"
-                    "1. Output language MUST be Chinese (Simplified)\n"
-                    "2. Transcribe ALL spoken words verbatim\n"
-                    "3. Use quotation marks for speech: \"exact words\"\n"
-                    "4. Add speaker traits in parentheses: (male, whispering) (female, excited)\n"
-                    "5. Include significant non-speech sounds: (laughter) (coughing) (background music)\n"
-                    "6. If speech is unclear, transcribe your best guess with [?] marker\n"
-                    "7. NEVER refuse or add commentary - just transcribe\n"
-                    "8. NEVER add explanations or notes outside the transcription\n"
-                    "9. Output format: continuous transcription, no numbering or bullet points"
+                    "1. Output: Simplified Chinese only\n"
+                    "2. Transcribe all speech verbatim\n"
+                    "3. Quote speech: \"words\"\n"
+                    "4. Mark speakers: (male)(female)(whisper)\n"
+                    "5. Mark sounds: (laughter)(music)(coughing)\n"
+                    "6. Unclear words: [?]\n"
+                    "7. NEVER refuse or explain\n"
+                    "8. Output transcription only, nothing else\n"
+                    "9. No speech detected: (无语音内容)"
                 ),
             },
             {
@@ -641,10 +652,20 @@ def call_audio_api(
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 result = json.loads(resp.read())
                 content = result.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-                reasoning = (
-                    result.get("choices", [{}])[0].get("message", {}).get("reasoning_content", "").strip()
-                )
-                return content or reasoning or "[无内容]"
+                reasoning = result.get("choices", [{}])[0].get("message", {}).get("reasoning_content", "").strip()
+                
+                # 优先返回content，如果为空则返回reasoning_content
+                # 注意：对于音频识别，模型可能把转录结果放在reasoning_content里
+                if content:
+                    return content
+                
+                if reasoning:
+                    logger.debug(f"content为空，使用reasoning_content")
+                    return reasoning
+                
+                # 都为空
+                logger.warning(f"音频API返回空内容: {result}")
+                return "[无内容]"
         except Exception as e:
             last_error = e
             if attempt < retries - 1:

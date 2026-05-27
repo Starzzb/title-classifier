@@ -34,6 +34,7 @@ dependencies = [
     "torchvision>=0.15.0",
     "ultralytics>=8.0.0",
     "tomli-w>=1.0.0",
+    "silero-vad>=5.1.0",
 ]
 
 [project.optional-dependencies]

@@ -111,10 +111,10 @@ class Scanner:
         force_reclassify: bool = False,
     ) -> str:
         """
-        扫描目录并生成待审表
+        扫描目录或单个文件并生成待审表
 
         Args:
-            target_dir: 目标目录
+            target_dir: 目标目录或单个文件路径
             output_file: 输出文件路径
             append: 是否追加模式
             exclude_dirs: 排除的目录列表
@@ -125,16 +125,23 @@ class Scanner:
         """
         target_path = Path(target_dir).resolve()
         if not target_path.exists():
-            logger.error(f"目录不存在: {target_path}")
+            logger.error(f"路径不存在: {target_path}")
             return ""
 
         if output_file is None:
             output_file = str(self.output_dir / "title_review.csv")
 
-        logger.info(f"开始递归扫描: {target_path}")
-
-        # 扫描文件
-        files = self._scan_directory(target_path, exclude_dirs or [])
+        # 判断是单个文件还是目录
+        if target_path.is_file():
+            logger.info(f"处理单个文件: {target_path}")
+            files = [target_path] if target_path.suffix.lower() in MEDIA_EXTENSIONS else []
+            if not files:
+                logger.warning(f"不支持的文件类型: {target_path}")
+                return ""
+        else:
+            logger.info(f"开始递归扫描: {target_path}")
+            files = self._scan_directory(target_path, exclude_dirs or [])
+        
         logger.info(f"找到 {len(files)} 个媒体文件")
 
         # 处理文件

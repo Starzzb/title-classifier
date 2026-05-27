@@ -35,6 +35,7 @@ class VisionProcessor:
         max_image_size: int = 800,
         vlm_frames: int = 10,
         analysis_step: float = 2.0,
+        debug_dir: str = None,
     ):
         self.provider = provider
         self.use_yolo = use_yolo
@@ -45,6 +46,7 @@ class VisionProcessor:
         self.max_image_size = max_image_size
         self.vlm_frames = vlm_frames
         self.analysis_step = analysis_step
+        self.debug_dir = debug_dir
 
         self.provider_config = get_provider_config(provider)
         self.model = self.provider_config.get("default_model", "") if self.provider_config else ""
@@ -101,6 +103,18 @@ class VisionProcessor:
         """视频全面分析"""
         logger.info(f"启动YOLO全面分析模式，采样间隔: {self.analysis_step}秒")
 
+        # 创建调试目录
+        debug_subdir = None
+        if self.debug_dir:
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            video_name = Path(video_path).stem[:30]
+            debug_subdir = Path(self.debug_dir) / f"{timestamp}_{video_name}"
+            debug_subdir.mkdir(parents=True, exist_ok=True)
+            (debug_subdir / "detection").mkdir(exist_ok=True)
+            (debug_subdir / "vlm_frames").mkdir(exist_ok=True)
+            logger.info(f"调试目录: {debug_subdir}")
+
         # 1. 全面扫描视频
         video_analysis = self._analyze_video_comprehensive(video_path, duration)
 
@@ -127,6 +141,17 @@ class VisionProcessor:
         frames_for_vlm = [selected_frames[i] for i in selected_indices if i < len(selected_frames)]
         logger.info(f"调用VLM: {len(frames_for_vlm)}帧")
         
+        # 保存调试数据 - 检测结果
+        if debug_subdir:
+            self._save_detection_debug(video_analysis, debug_subdir)
+
+        # 构建prompt（用于调试）
+        prompt = self._build_comprehensive_prompt(title, len(frames_for_vlm), comprehensive_context, audio_context)
+
+        # 保存调试数据 - VLM输入帧和prompt
+        if debug_subdir:
+            self._save_vlm_debug(frames_for_vlm, prompt, debug_subdir)
+
         result = self._call_vlm_comprehensive(
             frames_for_vlm,
             title,
@@ -135,6 +160,10 @@ class VisionProcessor:
         )
 
         logger.info(f"VLM结果: 描述='{result.get('description', '')[:50]}...', 关键词='{result.get('keywords', '')[:50]}...'")
+
+        # 保存调试数据 - VLM响应和汇总
+        if debug_subdir:
+            self._save_debug_summary(result, video_summary, debug_subdir)
 
         # 7. 保存分析结果
         analysis_result = {
@@ -146,6 +175,10 @@ class VisionProcessor:
             "pose_changes": len(video_summary.get("pose_changes", [])),
             "person_ratio": video_summary.get("person_ratio", 0),
         }
+
+        # 记录调试目录路径
+        if debug_subdir:
+            analysis_result["debug_dir"] = str(debug_subdir)
 
         return analysis_result
 
@@ -182,7 +215,8 @@ class VisionProcessor:
 
     def _analyze_video_comprehensive(self, video_path: str, duration: float) -> Dict:
         """全面分析视频 - 高密度采样"""
-        tmp_dir = Path(tempfile.mkdtemp())
+        tmp_dir = Path("logs/_vision_tmp") / Path(video_path).stem
+        tmp_dir.mkdir(parents=True, exist_ok=True)
         frames = []
         timeline = []
 
@@ -365,7 +399,7 @@ class VisionProcessor:
         """为选中帧生成描述"""
         descriptions = []
 
-        for idx in selected_indices:
+        for i, idx in enumerate(selected_indices):
             if idx >= len(timeline):
                 continue
 
@@ -378,9 +412,9 @@ class VisionProcessor:
                 conf = t.get("confidence", 0)
                 kpts = t.get("visible_keypoints", 0)
                 pose_str = ", ".join(poses) if poses else "未知姿态"
-                desc = f"帧@{ts:.1f}s: 检测到人体, 姿态={pose_str}, 置信度={conf:.2f}, 关键点={kpts}/17"
+                desc = f"图{i+1}@{ts:.1f}s: 人体检测, 姿态={pose_str}, 置信度={conf:.2f}, 关键点={kpts}/17"
             else:
-                desc = f"帧@{ts:.1f}s: 未检测到人体"
+                desc = f"图{i+1}@{ts:.1f}s: 未检测到人体"
 
             descriptions.append(desc)
 
@@ -425,7 +459,7 @@ class VisionProcessor:
             context_lines.append(f"- 平均可见关键点: {video_summary.get('avg_keypoints', 0):.1f}/17")
 
             context_lines.append("")
-            context_lines.append("【各帧详细分析】")
+            context_lines.append("【各帧详细分析（图片序号对应下方描述）】")
             for desc in frame_descriptions:
                 context_lines.append(f"- {desc}")
         else:
@@ -456,6 +490,92 @@ class VisionProcessor:
 
         return self._parse_vision_response(result)
 
+    def _save_detection_debug(self, video_analysis: Dict, debug_dir: Path):
+        """保存检测结果调试数据"""
+        import shutil
+
+        detection_dir = debug_dir / "detection"
+        timeline = video_analysis.get("timeline", [])
+        frames = video_analysis.get("frames", [])
+
+        # 保存每帧的检测结果
+        for i, entry in enumerate(timeline):
+            frame_path = entry.get("frame_path")
+            if not frame_path or not Path(frame_path).exists():
+                continue
+
+            stem = f"frame_{i:04d}_{entry.get('timestamp', 0):.1f}s"
+
+            # 复制原始帧
+            original_dest = detection_dir / f"{stem}_original.jpg"
+            shutil.copy2(frame_path, original_dest)
+
+            # 绘制检测结果并保存
+            try:
+                data = np.fromfile(frame_path, dtype=np.uint8)
+                frame = cv2.imdecode(data, cv2.IMREAD_COLOR)
+                if frame is not None:
+                    if self.use_yolo and self.yolo_detector:
+                        pose_result = self.yolo_detector.estimate_pose(frame)
+                        from ..detectors.yolo import draw_pose_on_frame
+                        annotated = draw_pose_on_frame(frame, pose_result)
+                    elif self.uhd_detector:
+                        det_result = self.uhd_detector.detect(frame)
+                        from ..detectors.uhd import draw_detection_on_frame
+                        annotated = draw_detection_on_frame(frame, det_result)
+                    else:
+                        annotated = frame
+
+                    annotated_dest = detection_dir / f"{stem}_annotated.jpg"
+                    cv2.imwrite(str(annotated_dest), annotated)
+            except Exception as e:
+                logger.warning(f"绘制检测结果失败: {e}")
+
+            # 保存检测结果JSON
+            json_dest = detection_dir / f"{stem}_result.json"
+            with open(json_dest, "w", encoding="utf-8") as f:
+                json.dump(entry, f, ensure_ascii=False, indent=2, default=str)
+
+        logger.info(f"检测调试数据已保存: {len(timeline)}帧")
+
+    def _save_vlm_debug(self, frames: List[str], prompt: str, debug_dir: Path):
+        """保存VLM输入调试数据"""
+        import shutil
+
+        vlm_dir = debug_dir / "vlm_frames"
+
+        # 复制VLM输入帧
+        for i, frame_path in enumerate(frames):
+            if Path(frame_path).exists():
+                dest = vlm_dir / f"selected_{i:03d}.jpg"
+                shutil.copy2(frame_path, dest)
+
+        # 保存prompt
+        prompt_file = debug_dir / "vlm_prompt.txt"
+        with open(prompt_file, "w", encoding="utf-8") as f:
+            f.write(prompt)
+
+        logger.info(f"VLM调试数据已保存: {len(frames)}帧, prompt长度={len(prompt)}")
+
+    def _save_debug_summary(self, vlm_result: Dict, video_summary: Dict, debug_dir: Path):
+        """保存调试汇总"""
+        # 保存VLM响应
+        response_file = debug_dir / "vlm_response.txt"
+        with open(response_file, "w", encoding="utf-8") as f:
+            f.write(f"描述: {vlm_result.get('description', '')}\n")
+            f.write(f"关键词: {vlm_result.get('keywords', '')}\n")
+
+        # 保存汇总JSON
+        summary = {
+            "vlm_result": vlm_result,
+            "video_summary": video_summary,
+        }
+        summary_file = debug_dir / "summary.json"
+        with open(summary_file, "w", encoding="utf-8") as f:
+            json.dump(summary, f, ensure_ascii=False, indent=2, default=str)
+
+        logger.info(f"调试汇总已保存")
+
     def _build_comprehensive_prompt(self, title: str, n_frames: int, context: str, audio_context: str = "") -> str:
         """构建全面分析提示词"""
         
@@ -464,55 +584,47 @@ class VisionProcessor:
         if audio_context:
             audio_section = f"""
 
-【音频转录内容】（参考音频内容可以更准确地理解视频）
-{audio_context}
+【音频转录】
+{audio_context}"""
 
-请结合音频转录内容和视觉画面，综合分析视频。"""
-
-        return f"""这是媒体文件 "{title}" 的{n_frames}个关键帧截图，用于文件管理归类。
+        return f"""分析媒体文件 "{title}" 的{n_frames}个关键帧。
 
 {context}
 {audio_section}
 
-请根据以上预分析结果和各帧截图，综合判断并描述这个视频的完整情况：
+【任务说明】
+这是一个媒体文件管理任务，需要对视频/图片进行客观的技术分析和元数据提取，用于文件归类和检索系统。
 
-1. 视频概述：这是一个什么样的视频？主要内容是什么？
-2. 人物穿着：详细描述人物的服装、配饰、发型等（如：女仆装、黑色丝袜、双马尾等）
-3. 姿势动作：描述人物的姿势、动作、姿态变化（如：跪姿、站立、弯腰等）
-4. 行为描述：描述人物的行为、互动（如：自拍、跳舞、行走等）
-5. 场景环境：视频的场景环境（如：室内、卧室、浴室等）
+【输出要求】
+1. 视频描述（2-3句话）：
+   - 客观描述画面中的视觉元素
+   - 包含：场景环境、人物外观特征、动作姿态
+   
+2. 关键词提取（4-8个，逗号分隔）：
+   按以下维度提取客观视觉特征：
 
-【关键词提取规则 - 重要】
+   第一优先级 - 水印/标识文字：
+   - 画面中出现的人名、昵称、水印文字
+   - 只提取人物名称，过滤掉网址、域名、@群组名等
 
-关键词必须聚焦以下维度（按优先级排序）：
+   第二优先级 - 人物外观特征：
+   - 服装类型：女仆装、校服、JK制服、旗袍、护士装、泳衣、内衣等
+   - 服饰细节：丝袜、过膝袜、高跟鞋、蕾丝、蝴蝶结等
+   - 颜色描述：黑色丝袜、白色衬衫、红色裙子等
+   - 发型特征：双马尾、长发、短发、马尾辫、丸子头等
 
-第一优先级 - 水印博主名字（最优先，必须包含）：
-- 博主昵称/艺名（如：Sexy Yuki、UUbabydoll、ciyuanbb等）
-- 只提取人物名称，不提取频道名、群组名
-- 过滤掉：网址、域名、@群组名、频道链接、广告内容
-- 过滤规则：包含 .com .cc .net .org @ http www 等的内容一律忽略
+   第三优先级 - 姿态动作：
+   - 基本姿势：站立、坐姿、跪姿、蹲姿、躺卧、弯腰
+   - 动作描述：自拍、跳舞、行走、摆拍、转身等
 
-第二优先级 - 人物穿着（必须包含）：
-- 服装类型：女仆装、校服、JK制服、旗袍、护士装、泳衣、内衣等
-- 服饰细节：丝袜、过膝袜、高跟鞋、蕾丝、蝴蝶结等
-- 颜色描述：黑色丝袜、白色衬衫、红色裙子等
-- 发型特征：双马尾、长发、短发、马尾辫、丸子头等
+   第四优先级 - 场景环境：
+   - 室内/室外、卧室、浴室、客厅等
+   - 背景特征
 
-第三优先级 - 姿势动作（必须包含）：
-- 基本姿势：站立、坐姿、跪姿、蹲姿、躺卧、弯腰
-- 动作描述：自拍、跳舞、行走、摆拍、转身等
-- 姿态特征：弓背、张腿、侧卧等
-
-【关键词格式要求】
-- 如果有水印博主名字，必须放在第一个
-- 必须包含至少2个穿着类关键词
-- 必须包含至少1个姿势类关键词
-- 总共4-8个关键词
-- 使用中文，用逗号分隔
-
-请严格按以下格式返回：
-描述：[综合描述，重点描述穿着、姿势、行为]
-关键词：[博主名, 穿着1, 穿着2, 姿势1, ...]"""
+【格式要求】
+请严格按以下格式返回，不要添加其他内容：
+描述：xxx
+关键词：xxx, xxx, xxx"""
 
     def process_image(self, image_path: str, title: str) -> Dict:
         """处理图片"""
@@ -547,7 +659,8 @@ class VisionProcessor:
 
     def _extract_frames(self, video_path: str) -> List[str]:
         """提取视频帧"""
-        tmp_dir = Path(tempfile.mkdtemp())
+        tmp_dir = Path("logs/_vision_tmp") / Path(video_path).stem
+        tmp_dir.mkdir(parents=True, exist_ok=True)
         frames = []
 
         keyframes = detect_keyframes(video_path, str(tmp_dir), max_frames=8, max_size=self.max_image_size)
@@ -903,12 +1016,28 @@ class VisionProcessor:
                 video_path, description, keywords, final_name, video_summary, srt_output_dir
             )
 
+        # 复制SRT到视频所在目录
+        if srt_path and Path(srt_path).exists():
+            video_dir = Path(video_path).parent
+            srt_filename = Path(srt_path).name
+            srt_in_video_dir = video_dir / srt_filename
+            
+            # 如果目标路径与源路径不同，则复制
+            if str(Path(srt_path).resolve()) != str(srt_in_video_dir.resolve()):
+                import shutil
+                try:
+                    shutil.copy2(srt_path, srt_in_video_dir)
+                    logger.info(f"SRT已复制到视频目录: {srt_in_video_dir}")
+                except Exception as e:
+                    logger.warning(f"复制SRT到视频目录失败: {e}")
+
         return {
             "description": description,
             "keywords": keywords,
             "final_name": final_name,
             "srt_path": srt_path,
             "video_summary": video_summary,
+            "debug_dir": result.get("debug_dir"),
         }
 
     def _find_audio_srt(self, original_title: str, srt_output_dir: str) -> str:

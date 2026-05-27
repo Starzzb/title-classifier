@@ -189,15 +189,18 @@ class TitleClassifierApp(tk.Tk):
         tab = ttk.Frame(self.notebook)
         self.notebook.add(tab, text="Stage1 扫描")
 
-        # 目录选择
-        dir_frame = ttk.LabelFrame(tab, text="扫描目录")
+        # 目录/文件选择
+        dir_frame = ttk.LabelFrame(tab, text="扫描目标")
         dir_frame.pack(fill=tk.X, padx=4, pady=4)
 
         self.s1_dir_var = tk.StringVar()
         dir_entry = ttk.Entry(dir_frame, textvariable=self.s1_dir_var, width=60)
         dir_entry.pack(side=tk.LEFT, padx=4)
-        ttk.Button(dir_frame, text="浏览...", command=self._browse_dir).pack(side=tk.LEFT, padx=4)
-        ToolTip(dir_entry, "选择要扫描的视频/图片目录，会递归扫描所有子目录")
+        ttk.Button(dir_frame, text="浏览目录...", command=self._browse_dir).pack(side=tk.LEFT, padx=2)
+        ttk.Button(dir_frame, text="选择文件...", command=self._browse_file).pack(side=tk.LEFT, padx=2)
+        ToolTip(dir_entry, "选择要扫描的视频/图片目录或单个文件\n\n"
+                "- 选择目录：递归扫描所有子目录\n"
+                "- 选择文件：只处理选中的单个文件")
 
         # 输出文件
         out_frame = ttk.LabelFrame(tab, text="输出文件")
@@ -310,15 +313,17 @@ class TitleClassifierApp(tk.Tk):
         preview_frame = ttk.LabelFrame(tab, text="优化结果预览（右键菜单可编辑）")
         preview_frame.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
 
-        # 创建树形视图（多选模式）- 添加needs_vision列
-        columns = ("original", "needs_vision", "refined")
+        # 创建树形视图（多选模式）- 添加needs_vision和audio_recognized列
+        columns = ("original", "needs_vision", "audio_recognized", "refined")
         self.s1b_tree = ttk.Treeview(preview_frame, columns=columns, show="headings", selectmode="extended")
         self.s1b_tree.heading("original", text="原始标题")
         self.s1b_tree.heading("needs_vision", text="需要视觉识别")
+        self.s1b_tree.heading("audio_recognized", text="音频已识别")
         self.s1b_tree.heading("refined", text="AI优化结果")
-        self.s1b_tree.column("original", width=250)
+        self.s1b_tree.column("original", width=200)
         self.s1b_tree.column("needs_vision", width=80, anchor="center")
-        self.s1b_tree.column("refined", width=350)
+        self.s1b_tree.column("audio_recognized", width=80, anchor="center")
+        self.s1b_tree.column("refined", width=300)
 
         # 滚动条
         scrollbar = ttk.Scrollbar(preview_frame, orient=tk.VERTICAL, command=self.s1b_tree.yview)
@@ -332,6 +337,7 @@ class TitleClassifierApp(tk.Tk):
         self.s1b_context_menu.add_command(label="采用原标题", command=self._s1b_use_original)
         self.s1b_context_menu.add_separator()
         self.s1b_context_menu.add_command(label="切换 needs_vision (TRUE/FALSE)", command=self._s1b_toggle_needs_vision)
+        self.s1b_context_menu.add_command(label="切换 audio_recognized (TRUE/FALSE)", command=self._s1b_toggle_audio_recognized)
         self.s1b_context_menu.add_separator()
         self.s1b_context_menu.add_command(label="删除选中行", command=self._s1b_delete)
 
@@ -398,35 +404,65 @@ class TitleClassifierApp(tk.Tk):
         skip_cb.pack(side=tk.LEFT, padx=8)
         ToolTip(skip_cb, "勾选后会跳过静音片段，节省API调用")
 
-        # 第二行：自适应分段配置
+        # 第二行：VAD配置
         audio_row2 = ttk.Frame(audio_frame)
         audio_row2.pack(fill=tk.X, padx=4, pady=2)
 
-        self.s1ca_adaptive_var = tk.BooleanVar(value=True)
-        adaptive_cb = ttk.Checkbutton(audio_row2, text="自适应分段", variable=self.s1ca_adaptive_var)
-        adaptive_cb.pack(side=tk.LEFT, padx=4)
-        ToolTip(adaptive_cb, "根据音频能量自动调整分段长度\n\n"
-                "- 高能量区域（说话多）：细分（15-20秒）\n"
-                "- 低能量区域（静音少）：合并（30-60秒）\n"
-                "- 可显著减少API调用次数")
+        self.s1ca_vad_enabled_var = tk.BooleanVar(value=True)
+        vad_cb = ttk.Checkbutton(audio_row2, text="使用VAD语音检测", variable=self.s1ca_vad_enabled_var)
+        vad_cb.pack(side=tk.LEFT, padx=4)
+        ToolTip(vad_cb, "使用Silero VAD进行语音活动检测（推荐）\n\n"
+                "- 基于深度学习模型，检测精度高\n"
+                "- 能区分人声vs噪音/音乐\n"
+                "- 毫秒级语音边界检测\n"
+                "- 显著减少无效API调用")
 
-        ttk.Label(audio_row2, text="最小时长(秒):").pack(side=tk.LEFT, padx=8)
-        self.s1ca_min_segment_var = tk.StringVar(value="15")
-        min_seg_entry = ttk.Entry(audio_row2, textvariable=self.s1ca_min_segment_var, width=6)
-        min_seg_entry.pack(side=tk.LEFT, padx=4)
-        ToolTip(min_seg_entry, "自适应分段的最小时长\n\n"
-                "- 较小值：更灵活的分段，但API调用次数增加\n"
-                "- 较大值：更少的API调用，但可能错过语音边界\n"
-                "- 推荐：15秒")
+        ttk.Label(audio_row2, text="最小时长(ms):").pack(side=tk.LEFT, padx=8)
+        self.s1ca_vad_min_speech_var = tk.StringVar(value="250")
+        vad_speech_entry = ttk.Entry(audio_row2, textvariable=self.s1ca_vad_min_speech_var, width=6)
+        vad_speech_entry.pack(side=tk.LEFT, padx=4)
+        ToolTip(vad_speech_entry, "VAD检测的最小时长（毫秒）\n\n"
+                "- 低于此时长的语音段会被忽略\n"
+                "- 推荐：250ms")
 
-        ttk.Label(audio_row2, text="最大时长(秒):").pack(side=tk.LEFT, padx=8)
-        self.s1ca_max_segment_var = tk.StringVar(value="60")
-        max_seg_entry = ttk.Entry(audio_row2, textvariable=self.s1ca_max_segment_var, width=6)
-        max_seg_entry.pack(side=tk.LEFT, padx=4)
-        ToolTip(max_seg_entry, "自适应分段的最大时长\n\n"
-                "- 较小值：更精确的字幕时间戳\n"
-                "- 较大值：更少的API调用\n"
-                "- 推荐：60秒")
+        ttk.Label(audio_row2, text="最小静音(ms):").pack(side=tk.LEFT, padx=8)
+        self.s1ca_vad_min_silence_var = tk.StringVar(value="100")
+        vad_silence_entry = ttk.Entry(audio_row2, textvariable=self.s1ca_vad_min_silence_var, width=6)
+        vad_silence_entry.pack(side=tk.LEFT, padx=4)
+        ToolTip(vad_silence_entry, "VAD检测的最小静音时长（毫秒）\n\n"
+                "- 用于合并相邻的语音段\n"
+                "- 推荐：100ms")
+
+        # 第三行：字幕后处理配置
+        audio_row3 = ttk.Frame(audio_frame)
+        audio_row3.pack(fill=tk.X, padx=4, pady=2)
+
+        self.s1ca_postprocess_var = tk.BooleanVar(value=True)
+        postprocess_cb = ttk.Checkbutton(audio_row3, text="字幕后处理", variable=self.s1ca_postprocess_var)
+        postprocess_cb.pack(side=tk.LEFT, padx=4)
+        ToolTip(postprocess_cb, "启用字幕后处理（推荐）\n\n"
+                "- 拆分长字幕为多个短字幕\n"
+                "- 过滤无效内容（时间戳列表、拒绝响应等）\n"
+                "- 格式化字幕文本\n"
+                "- 显著提升字幕可读性")
+
+        ttk.Label(audio_row3, text="最长时长(秒):").pack(side=tk.LEFT, padx=8)
+        self.s1ca_max_duration_var = tk.StringVar(value="10")
+        max_dur_entry = ttk.Entry(audio_row3, textvariable=self.s1ca_max_duration_var, width=6)
+        max_dur_entry.pack(side=tk.LEFT, padx=4)
+        ToolTip(max_dur_entry, "单个字幕的最大时长（秒）\n\n"
+                "- 较小值：字幕更短，阅读更轻松\n"
+                "- 较大值：字幕更长，上下文更完整\n"
+                "- 推荐：10秒")
+
+        ttk.Label(audio_row3, text="最大字符数:").pack(side=tk.LEFT, padx=8)
+        self.s1ca_max_chars_var = tk.StringVar(value="100")
+        max_chars_entry = ttk.Entry(audio_row3, textvariable=self.s1ca_max_chars_var, width=6)
+        max_chars_entry.pack(side=tk.LEFT, padx=4)
+        ToolTip(max_chars_entry, "单个字幕的最大字符数\n\n"
+                "- 较小值：字幕更短，适合手机阅读\n"
+                "- 较大值：字幕更长，适合大屏幕\n"
+                "- 推荐：100字符")
 
         # 选项
         opt_frame = ttk.LabelFrame(tab, text="选项")
@@ -447,9 +483,9 @@ class TitleClassifierApp(tk.Tk):
         audio_btn.pack(side=tk.LEFT, padx=4)
         ToolTip(audio_btn, "对视频进行音频识别\n\n"
                 "流程：\n"
-                "1. 扫描音频能量分布\n"
-                "2. 自适应分段（跳过静音）\n"
-                "3. 调用AI进行语音转录\n"
+                "1. VAD检测语音段/静音段\n"
+                "2. 调用AI进行语音转录\n"
+                "3. 字幕后处理（拆分长字幕、过滤无效内容）\n"
                 "4. 生成SRT字幕文件\n"
                 "5. 更新CSV中的audio_recognized和srt_path\n\n"
                 "完成后，视觉识别会自动读取音频转录内容")
@@ -550,71 +586,14 @@ class TitleClassifierApp(tk.Tk):
                 "- 不勾选：只处理needs_vision=TRUE的文件\n"
                 "- 勾选：忽略needs_vision字段，处理所有未识别文件")
 
-        self.s1c_audio_var = tk.BooleanVar()
-        audio_cb = ttk.Checkbutton(opt_frame, text="生成音频字幕", variable=self.s1c_audio_var)
-        audio_cb.pack(side=tk.LEFT, padx=4)
-        ToolTip(audio_cb, "勾选后会提取视频音频并生成字幕\n\n"
-                "- 使用MiMo模型进行语音识别\n"
-                "- 字幕会追加到SRT文件中\n"
-                "- 需要配置MIMO_API_KEY")
-
-        # 音频配置
-        audio_frame = ttk.LabelFrame(tab, text="音频配置")
-        audio_frame.pack(fill=tk.X, padx=4, pady=4)
-
-        # 第一行：基本配置
-        audio_row1 = ttk.Frame(audio_frame)
-        audio_row1.pack(fill=tk.X, padx=4, pady=2)
-
-        ttk.Label(audio_row1, text="音量阈值:").pack(side=tk.LEFT, padx=4)
-        self.s1c_volume_threshold_var = tk.StringVar(value="0.01")
-        vol_entry = ttk.Entry(audio_row1, textvariable=self.s1c_volume_threshold_var, width=8)
-        vol_entry.pack(side=tk.LEFT, padx=4)
-        ToolTip(vol_entry, "静音检测阈值（RMS能量，0-1之间）\n\n"
-                "- 较低值：更敏感，可能误判噪音为语音\n"
-                "- 较高值：更严格，可能漏掉轻声说话\n"
-                "- 推荐：0.01")
-
-        self.s1c_skip_silence_var = tk.BooleanVar(value=True)
-        skip_cb = ttk.Checkbutton(audio_row1, text="跳过静音", variable=self.s1c_skip_silence_var)
-        skip_cb.pack(side=tk.LEFT, padx=8)
-        ToolTip(skip_cb, "勾选后会跳过静音片段，节省API调用")
-
-        # 第二行：自适应分段配置
-        audio_row2 = ttk.Frame(audio_frame)
-        audio_row2.pack(fill=tk.X, padx=4, pady=2)
-
-        self.s1c_adaptive_var = tk.BooleanVar(value=True)
-        adaptive_cb = ttk.Checkbutton(audio_row2, text="自适应分段", variable=self.s1c_adaptive_var)
-        adaptive_cb.pack(side=tk.LEFT, padx=4)
-        ToolTip(adaptive_cb, "根据音频能量自动调整分段长度\n\n"
-                "- 高能量区域（说话多）：细分（15-20秒）\n"
-                "- 低能量区域（静音少）：合并（30-60秒）\n"
-                "- 可显著减少API调用次数")
-
-        ttk.Label(audio_row2, text="最小时长(秒):").pack(side=tk.LEFT, padx=8)
-        self.s1c_min_segment_var = tk.StringVar(value="15")
-        min_seg_entry = ttk.Entry(audio_row2, textvariable=self.s1c_min_segment_var, width=6)
-        min_seg_entry.pack(side=tk.LEFT, padx=4)
-        ToolTip(min_seg_entry, "自适应分段的最小时长\n\n"
-                "- 较小值：更灵活的分段，但API调用次数增加\n"
-                "- 较大值：更少的API调用，但可能错过语音边界\n"
-                "- 推荐：15秒")
-
-        ttk.Label(audio_row2, text="最大时长(秒):").pack(side=tk.LEFT, padx=8)
-        self.s1c_max_segment_var = tk.StringVar(value="60")
-        max_seg_entry = ttk.Entry(audio_row2, textvariable=self.s1c_max_segment_var, width=6)
-        max_seg_entry.pack(side=tk.LEFT, padx=4)
-        ToolTip(max_seg_entry, "自适应分段的最大时长\n\n"
-                "- 较小值：更精确的字幕时间戳\n"
-                "- 较大值：更少的API调用\n"
-                "- 推荐：60秒")
-
-        # 保存配置按钮
-        save_config_btn = ttk.Button(audio_row2, text="保存配置", command=self._save_audio_config)
-        save_config_btn.pack(side=tk.LEFT, padx=8)
-        ToolTip(save_config_btn, "保存音频配置到config文件\n\n"
-                "配置会自动保存，也可手动点击此按钮保存")
+        self.s1c_debug_var = tk.BooleanVar()
+        debug_cb = ttk.Checkbutton(opt_frame, text="启用调试", variable=self.s1c_debug_var)
+        debug_cb.pack(side=tk.LEFT, padx=4)
+        ToolTip(debug_cb, "启用调试模式，保存检测结果和VLM输入输出\n\n"
+                "- 保存每帧的检测结果（原始帧+标注帧+JSON）\n"
+                "- 保存VLM输入帧和Prompt\n"
+                "- 保存VLM响应\n"
+                "- 处理完成后自动打开调试窗口")
 
         # 执行按钮
         btn_frame = ttk.Frame(tab)
@@ -690,6 +669,18 @@ class TitleClassifierApp(tk.Tk):
         dir_path = filedialog.askdirectory(title="选择扫描目录")
         if dir_path:
             self.s1_dir_var.set(dir_path)
+
+    def _browse_file(self):
+        """浏览文件"""
+        filetypes = [
+            ("媒体文件", "*.mp4 *.mkv *.avi *.mov *.flv *.wmv *.webm *.m4v *.ts *.jpg *.jpeg *.png *.bmp *.webp"),
+            ("视频文件", "*.mp4 *.mkv *.avi *.mov *.flv *.wmv *.webm *.m4v *.ts"),
+            ("图片文件", "*.jpg *.jpeg *.png *.bmp *.webp"),
+            ("所有文件", "*.*"),
+        ]
+        file_path = filedialog.askopenfilename(title="选择媒体文件", filetypes=filetypes)
+        if file_path:
+            self.s1_dir_var.set(file_path)
 
     def _browse_csv_s1b(self):
         """浏览CSV文件"""
@@ -816,14 +807,21 @@ class TitleClassifierApp(tk.Tk):
 
                     original = row.get("original_title", "")
                     final = row.get("final_name", "")
+                    audio_recognized = row.get("audio_recognized", "").strip().lower()
                     
-                    # 插入到表格（显示原始标题、needs_vision、AI优化结果）
-                    item_id = self.s1b_tree.insert("", tk.END, values=(original, needs_vision.upper(), final))
+                    # 插入到表格
+                    item_id = self.s1b_tree.insert("", tk.END, values=(
+                        original, 
+                        needs_vision.upper(), 
+                        audio_recognized.upper() if audio_recognized else "FALSE",
+                        final
+                    ))
                     self.s1b_results[item_id] = {
                         "row_index": i,
                         "original_title": original,
                         "final_name": final,
                         "needs_vision": needs_vision,
+                        "audio_recognized": audio_recognized,
                     }
                     loaded_count += 1
 
@@ -1036,12 +1034,31 @@ class TitleClassifierApp(tk.Tk):
             values = self.s1b_tree.item(item, "values")
             current = values[1].upper()  # needs_vision is at index 1
             new_value = "FALSE" if current == "TRUE" else "TRUE"
-            self.s1b_tree.item(item, values=(values[0], new_value, values[2]))
+            self.s1b_tree.item(item, values=(values[0], new_value, values[2], values[3]))
             if item in self.s1b_results:
                 self.s1b_results[item]["needs_vision"] = new_value.lower()
             count += 1
 
         print(f"[完成] 已切换 {count} 条记录的needs_vision值")
+
+    def _s1b_toggle_audio_recognized(self):
+        """切换选中行的audio_recognized值"""
+        selected = self.s1b_tree.selection()
+        if not selected:
+            messagebox.showwarning("警告", "请先选择要修改的行")
+            return
+
+        count = 0
+        for item in selected:
+            values = self.s1b_tree.item(item, "values")
+            current = values[2].upper()  # audio_recognized is at index 2
+            new_value = "FALSE" if current == "TRUE" else "TRUE"
+            self.s1b_tree.item(item, values=(values[0], values[1], new_value, values[3]))
+            if item in self.s1b_results:
+                self.s1b_results[item]["audio_recognized"] = new_value.lower()
+            count += 1
+
+        print(f"[完成] 已切换 {count} 条记录的audio_recognized值")
 
     def _s1b_fill_original_selected(self):
         """将选中行的原标题填入final_name"""
@@ -1055,7 +1072,8 @@ class TitleClassifierApp(tk.Tk):
             values = self.s1b_tree.item(item, "values")
             original = values[0]
             needs_vision = values[1]  # keep needs_vision
-            self.s1b_tree.item(item, values=(original, needs_vision, original))
+            audio_recognized = values[2]  # keep audio_recognized
+            self.s1b_tree.item(item, values=(original, needs_vision, audio_recognized, original))
             if item in self.s1b_results:
                 self.s1b_results[item]["final_name"] = original
             count += 1
@@ -1133,6 +1151,11 @@ class TitleClassifierApp(tk.Tk):
                     if needs_vision:
                         rows[row_index]["needs_vision"] = needs_vision
                     
+                    # 更新audio_recognized
+                    audio_recognized = result.get("audio_recognized", "")
+                    if audio_recognized:
+                        rows[row_index]["audio_recognized"] = audio_recognized
+                    
                     updated += 1
 
             # 保存CSV
@@ -1150,18 +1173,132 @@ class TitleClassifierApp(tk.Tk):
 
     def _run_audio(self):
         """运行音频识别"""
-        csv = self.s1ca_csv_var.get()
+        csv_path = self.s1ca_csv_var.get()
         provider = self.s1ca_provider_var.get()
 
         # 保存音频配置
         self._save_audio_config_from_gui()
 
-        cmd = [PYTHON, "-m", "title_classifier", "audio", "-c", csv, "-p", provider]
+        # 在后台线程中运行音频处理
+        def run_audio_task():
+            import csv
+            from pathlib import Path
+            
+            try:
+                # 读取CSV文件
+                csv_file = Path(csv_path)
+                if not csv_file.exists():
+                    print(f"[错误] CSV文件不存在: {csv_path}")
+                    return
 
-        if self.s1ca_all_var.get():
-            cmd.append("--all")
+                with open(csv_file, "r", encoding="utf-8-sig") as f:
+                    reader = csv.DictReader(f)
+                    fieldnames = list(reader.fieldnames)
+                    rows = list(reader)
 
-        self._run_command(cmd)
+                if not rows:
+                    print("[警告] CSV为空")
+                    return
+
+                # 确保字段存在
+                for col in ["audio_recognized", "srt_path"]:
+                    if col not in fieldnames:
+                        fieldnames.append(col)
+
+                # 筛选需要处理的记录
+                process_all = self.s1ca_all_var.get()
+                pending = []
+                for i, row in enumerate(rows):
+                    if process_all:
+                        if row.get("original_path", "").strip():
+                            pending.append((i, row))
+                    else:
+                        if (row.get("needs_vision", "").strip().lower() == "true" and
+                            row.get("audio_recognized", "").strip().lower() != "true"):
+                            pending.append((i, row))
+
+                print(f"共 {len(rows)} 条记录，待处理 {len(pending)} 条")
+
+                if not pending:
+                    print("[完成] 无需处理")
+                    return
+
+                # 导入AudioProcessor
+                from ..utils.audio import AudioProcessor, load_audio_config
+                from datetime import datetime
+                
+                # 加载配置并创建处理器
+                config = load_audio_config()
+                processor = AudioProcessor(
+                    provider=provider,
+                    config=config,
+                )
+
+                # 处理每个文件
+                srt_dir = str(csv_file.parent / "subtitles")
+                Path(srt_dir).mkdir(parents=True, exist_ok=True)
+
+                total = len(pending)
+                success = 0
+                failed = 0
+
+                for idx, (row_idx, row) in enumerate(pending):
+                    original_path = row.get("original_path", "").strip()
+                    original_title = row.get("original_title", "").strip()
+
+                    if not original_path or not Path(original_path).exists():
+                        print(f"[{idx+1}/{total}] 跳过（文件不存在）: {original_title[:40]}")
+                        failed += 1
+                        continue
+
+                    print(f"[{idx+1}/{total}] 处理: {original_title[:40]}")
+
+                    start_time = datetime.now()
+
+                    try:
+                        srt_name = Path(original_title).stem + ".srt"
+                        srt_path = str(Path(srt_dir) / srt_name)
+
+                        result_path = processor.process_video(
+                            video_path=original_path,
+                            output_srt=srt_path,
+                        )
+
+                        elapsed = (datetime.now() - start_time).total_seconds()
+
+                        if result_path:
+                            rows[row_idx]["audio_recognized"] = "true"
+                            rows[row_idx]["srt_path"] = result_path
+                            print(f"  [完成] {elapsed:.1f}秒")
+                            print(f"  SRT: {result_path}")
+                            success += 1
+                        else:
+                            print(f"  [警告] 音频识别无结果")
+                            failed += 1
+
+                    except Exception as e:
+                        print(f"  [错误] {e}")
+                        failed += 1
+
+                    # 每处理完一条立即保存CSV
+                    with open(csv_file, "w", encoding="utf-8-sig", newline="") as f:
+                        writer = csv.DictWriter(f, fieldnames=fieldnames)
+                        writer.writeheader()
+                        writer.writerows(rows)
+
+                print(f"\n[统计]")
+                print(f"  成功: {success}")
+                print(f"  失败: {failed}")
+                print(f"  结果已保存至: {csv_path}")
+
+            except Exception as e:
+                print(f"[错误] 音频处理失败: {e}")
+                import traceback
+                traceback.print_exc()
+
+        # 在后台线程中执行
+        thread = threading.Thread(target=run_audio_task, daemon=True)
+        thread.start()
 
     def _save_audio_config_from_gui(self):
         """从音频识别标签页保存配置"""
@@ -1181,13 +1318,22 @@ class TitleClassifierApp(tk.Tk):
             
             config["audio"]["skip_silence"] = self.s1ca_skip_silence_var.get()
             config["audio"]["volume_threshold"] = float(self.s1ca_volume_threshold_var.get())
-            
-            if "adaptive" not in config["audio"]:
-                config["audio"]["adaptive"] = {}
-            
-            config["audio"]["adaptive"]["enabled"] = self.s1ca_adaptive_var.get()
-            config["audio"]["adaptive"]["min_segment"] = int(self.s1ca_min_segment_var.get())
-            config["audio"]["adaptive"]["max_segment"] = int(self.s1ca_max_segment_var.get())
+
+            # VAD配置
+            if "vad" not in config["audio"]:
+                config["audio"]["vad"] = {}
+
+            config["audio"]["vad"]["enabled"] = self.s1ca_vad_enabled_var.get()
+            config["audio"]["vad"]["min_speech_ms"] = int(self.s1ca_vad_min_speech_var.get())
+            config["audio"]["vad"]["min_silence_ms"] = int(self.s1ca_vad_min_silence_var.get())
+
+            # 字幕后处理配置
+            if "postprocess" not in config["audio"]:
+                config["audio"]["postprocess"] = {}
+
+            config["audio"]["postprocess"]["enabled"] = self.s1ca_postprocess_var.get()
+            config["audio"]["postprocess"]["max_subtitle_duration"] = int(self.s1ca_max_duration_var.get())
+            config["audio"]["postprocess"]["max_subtitle_chars"] = int(self.s1ca_max_chars_var.get())
             
             # 写入配置文件
             import tomli_w
@@ -1229,13 +1375,42 @@ class TitleClassifierApp(tk.Tk):
         if self.s1c_all_var.get():
             cmd.append("--all")
 
-        # 保存音频配置到config文件（无论是否启用音频都保存）
-        self._save_audio_config()
+        # 调试模式
+        if self.s1c_debug_var.get():
+            cmd.append("--debug")
+            self._debug_enabled = True
+        else:
+            self._debug_enabled = False
 
-        if self.s1c_audio_var.get():
-            cmd.append("--audio")
+        # 定义完成回调，用于打开调试窗口
+        def on_vision_complete():
+            if getattr(self, '_debug_enabled', False):
+                self._open_latest_debug_dir()
 
-        self._run_command(cmd)
+        self._run_command(cmd, callback=on_vision_complete)
+
+    def _open_latest_debug_dir(self):
+        """打开最新的调试目录"""
+        debug_dir = PROJECT_DIR / "data" / "debug"
+        if not debug_dir.exists():
+            print("[调试] 未找到调试目录")
+            return
+
+        # 查找最新的子目录
+        subdirs = sorted(debug_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
+        if not subdirs:
+            print("[调试] 调试目录为空")
+            return
+
+        latest_dir = subdirs[0]
+        print(f"[调试] 正在打开调试窗口: {latest_dir.name}")
+
+        try:
+            from .debug_window import DebugWindow
+            DebugWindow(self, str(latest_dir))
+        except Exception as e:
+            print(f"[错误] 打开调试窗口失败: {e}")
+            messagebox.showerror("错误", f"打开调试窗口失败: {e}")
 
     def _load_audio_config_to_gui(self):
         """从config文件加载音频配置到GUI"""
@@ -1250,62 +1425,36 @@ class TitleClassifierApp(tk.Tk):
                 config = tomllib.load(f)
             
             audio_config = config.get("audio", {})
-            adaptive_config = audio_config.get("adaptive", {})
+            vad_config = audio_config.get("vad", {})
+
+            # 更新GUI变量（Stage1c音频识别标签页）
+            if hasattr(self, 's1ca_volume_threshold_var'):
+                if "volume_threshold" in audio_config:
+                    self.s1ca_volume_threshold_var.set(str(audio_config["volume_threshold"]))
+                if "skip_silence" in audio_config:
+                    self.s1ca_skip_silence_var.set(audio_config["skip_silence"])
+
+                # VAD配置
+                if "enabled" in vad_config:
+                    self.s1ca_vad_enabled_var.set(vad_config["enabled"])
+                if "min_speech_ms" in vad_config:
+                    self.s1ca_vad_min_speech_var.set(str(vad_config["min_speech_ms"]))
+                if "min_silence_ms" in vad_config:
+                    self.s1ca_vad_min_silence_var.set(str(vad_config["min_silence_ms"]))
+
+                # 字幕后处理配置
+                postprocess_config = audio_config.get("postprocess", {})
+                if "enabled" in postprocess_config:
+                    self.s1ca_postprocess_var.set(postprocess_config["enabled"])
+                if "max_subtitle_duration" in postprocess_config:
+                    self.s1ca_max_duration_var.set(str(postprocess_config["max_subtitle_duration"]))
+                if "max_subtitle_chars" in postprocess_config:
+                    self.s1ca_max_chars_var.set(str(postprocess_config["max_subtitle_chars"]))
             
-            # 更新GUI变量
-            if "volume_threshold" in audio_config:
-                self.s1c_volume_threshold_var.set(str(audio_config["volume_threshold"]))
-            if "skip_silence" in audio_config:
-                self.s1c_skip_silence_var.set(audio_config["skip_silence"])
-            if "enabled" in adaptive_config:
-                self.s1c_adaptive_var.set(adaptive_config["enabled"])
-            if "min_segment" in adaptive_config:
-                self.s1c_min_segment_var.set(str(adaptive_config["min_segment"]))
-            if "max_segment" in adaptive_config:
-                self.s1c_max_segment_var.set(str(adaptive_config["max_segment"]))
-            
-            print(f"[配置] 已加载音频配置: 阈值={audio_config.get('volume_threshold', 0.01)}")
+            print(f"[配置] 已加载音频配置: VAD={vad_config.get('enabled', True)}, 后处理={postprocess_config.get('enabled', True)}")
             
         except Exception as e:
             print(f"[警告] 加载音频配置失败: {e}")
-
-    def _save_audio_config(self):
-        """保存音频配置到config文件"""
-        try:
-            import tomllib
-            config_path = PROJECT_DIR / "config" / "default.toml"
-            
-            # 读取现有配置
-            config = {}
-            if config_path.exists():
-                with open(config_path, "rb") as f:
-                    config = tomllib.load(f)
-            
-            # 更新音频配置
-            if "audio" not in config:
-                config["audio"] = {}
-            
-            config["audio"]["skip_silence"] = self.s1c_skip_silence_var.get()
-            config["audio"]["volume_threshold"] = float(self.s1c_volume_threshold_var.get())
-            
-            if "adaptive" not in config["audio"]:
-                config["audio"]["adaptive"] = {}
-            
-            config["audio"]["adaptive"]["enabled"] = self.s1c_adaptive_var.get()
-            config["audio"]["adaptive"]["min_segment"] = int(self.s1c_min_segment_var.get())
-            config["audio"]["adaptive"]["max_segment"] = int(self.s1c_max_segment_var.get())
-            
-            # 写入配置文件
-            import tomli_w
-            with open(config_path, "wb") as f:
-                tomli_w.dump(config, f)
-            
-            print(f"[配置] 音频配置已保存到: {config_path}")
-            
-        except ImportError:
-            print("[警告] tomli_w 未安装，无法保存配置文件")
-        except Exception as e:
-            print(f"[警告] 保存音频配置失败: {e}")
 
     def _batch_confirm(self):
         """批量确认所有记录"""
