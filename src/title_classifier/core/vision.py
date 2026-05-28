@@ -33,7 +33,7 @@ class VisionProcessor:
         yolo_conf: float = 0.5,
         use_clip: bool = False,
         clip_threshold: float = 0.25,
-        max_image_size: int = 480,
+        max_image_size: int = 640,
         vlm_frames: int = 10,
         analysis_step: float = 2.0,
         debug_dir: str = None,
