@@ -7,6 +7,10 @@
 示例:
     python scripts/full_workflow.py "D:/aria2/love"
     python scripts/full_workflow.py "D:/aria2/love" --dry-run  # 仅模拟重命名
+
+多开并行: 每个目录自动分配独立 CSV，可同时运行多个窗口
+    python scripts/full_workflow.py "D:/aria2/love"
+    python scripts/full_workflow.py "D:/aria2/anime"  # 另一个窗口
 """
 
 import sys
@@ -17,9 +21,16 @@ import argparse
 import subprocess
 from pathlib import Path
 
-# 确保能找到项目模块
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+
+def get_csv_path(target_dir: str) -> str:
+    """根据目标目录生成唯一的 CSV 路径，避免多实例冲突"""
+    dir_name = Path(target_dir).resolve().name
+    csv_dir = PROJECT_ROOT / "data" / "output" / dir_name
+    csv_dir.mkdir(parents=True, exist_ok=True)
+    return str(csv_dir / "title_review.csv")
 
 
 def run_cmd(args: list, desc: str, timeout: int = 3600):
@@ -41,23 +52,32 @@ def run_cmd(args: list, desc: str, timeout: int = 3600):
     return result.returncode
 
 
-def step_scan(target_dir: str):
+def step_scan(target_dir: str, csv_path: str):
     """Step 1: 扫描目录"""
-    cmd = [sys.executable, "-m", "title_classifier", "scan", "-d", target_dir, "--force"]
+    cmd = [
+        sys.executable, "-m", "title_classifier", "scan",
+        "-d", target_dir,
+        "-o", csv_path,
+        "--force",
+    ]
     return run_cmd(cmd, f"扫描目录: {target_dir}")
 
 
-def step_audio():
+def step_audio(csv_path: str):
     """Step 2: 音频识别"""
-    cmd = [sys.executable, "-m", "title_classifier", "audio", "--all", "-p", "mimo"]
+    cmd = [
+        sys.executable, "-m", "title_classifier", "audio",
+        "--all", "-p", "mimo", "-c", csv_path,
+    ]
     return run_cmd(cmd, "音频识别 (mimo)", timeout=1800)
 
 
-def step_vision():
+def step_vision(csv_path: str):
     """Step 3: 视觉识别"""
     cmd = [
-        sys.executable, "-m", "title_classifier", "vision", "--all",
-        "-p", "gcli", "--use-yolo", "--comprehensive",
+        sys.executable, "-m", "title_classifier", "vision",
+        "--all", "-p", "gcli", "--use-yolo", "--comprehensive",
+        "-c", csv_path,
     ]
     return run_cmd(cmd, "视觉识别 (gcli + YOLO全面分析)", timeout=3600)
 
@@ -68,7 +88,6 @@ def step_mux_subtitles(csv_path: str):
     print(f"[步骤] 字幕封装")
     print(f"{'='*60}\n")
 
-    # 加载环境变量
     env_path = PROJECT_ROOT / ".env"
     if env_path.exists():
         with open(env_path, "r", encoding="utf-8") as f:
@@ -100,7 +119,6 @@ def step_mux_subtitles(csv_path: str):
 
     for row in rows:
         original_path = row.get("original_path", "").strip()
-        final_name = row.get("final_name", "").strip()
         srt_path = row.get("srt_path", "").strip()
 
         if not original_path or not Path(original_path).exists():
@@ -111,20 +129,17 @@ def step_mux_subtitles(csv_path: str):
             skipped += 1
             continue
 
-        # 只处理视频文件
         VIDEO_EXT = {".mp4", ".mkv", ".avi", ".mov", ".flv", ".wmv", ".webm", ".m4v", ".ts"}
         if Path(original_path).suffix.lower() not in VIDEO_EXT:
             skipped += 1
             continue
 
-        # 如果 srt_path 是绝对路径，直接用；否则在 srt_dir 下找
         if not Path(srt_path).is_absolute():
             srt_full = Path(srt_dir) / Path(srt_path).name
         else:
             srt_full = Path(srt_path)
 
         if not srt_full.exists():
-            # 尝试在原文件同目录找同名 SRT
             srt_same_dir = Path(original_path).with_suffix(".srt")
             if srt_same_dir.exists():
                 srt_full = srt_same_dir
@@ -174,10 +189,10 @@ def step_confirm_all(csv_path: str):
     return 0
 
 
-def step_rename(dry_run: bool = False):
+def step_rename(csv_path: str, dry_run: bool = False):
     """Step 6: 执行重命名"""
     mode = "模拟重命名" if dry_run else "执行重命名"
-    cmd = [sys.executable, "-m", "title_classifier", "rename"]
+    cmd = [sys.executable, "-m", "title_classifier", "rename", "-c", csv_path]
     if dry_run:
         cmd.append("--dry-run")
     return run_cmd(cmd, mode)
@@ -187,7 +202,6 @@ def main():
     parser = argparse.ArgumentParser(description="完整工作流：扫描→音频→视觉→字幕封装→确认→重命名")
     parser.add_argument("target_dir", help="目标视频目录")
     parser.add_argument("--dry-run", action="store_true", help="仅模拟重命名，不实际执行")
-    parser.add_argument("--csv", default="data/output/title_review.csv", help="CSV 文件路径")
     parser.add_argument("--skip-audio", action="store_true", help="跳过音频识别")
     parser.add_argument("--skip-vision", action="store_true", help="跳过视觉识别")
     parser.add_argument("--skip-mux", action="store_true", help="跳过字幕封装")
@@ -198,20 +212,22 @@ def main():
         print(f"[错误] 目录不存在: {target_dir}")
         sys.exit(1)
 
-    csv_path = str((PROJECT_ROOT / args.csv).resolve())
+    csv_path = get_csv_path(str(target_dir))
+    print(f"[目录] {target_dir}")
+    print(f"[CSV]  {csv_path}")
 
     start = time.time()
 
     # Step 1: 扫描
-    step_scan(str(target_dir))
+    step_scan(str(target_dir), csv_path)
 
     # Step 2: 音频识别
     if not args.skip_audio:
-        step_audio()
+        step_audio(csv_path)
 
     # Step 3: 视觉识别
     if not args.skip_vision:
-        step_vision()
+        step_vision(csv_path)
 
     # Step 4: 字幕封装
     if not args.skip_mux:
@@ -221,7 +237,7 @@ def main():
     step_confirm_all(csv_path)
 
     # Step 6: 重命名
-    step_rename(dry_run=args.dry_run)
+    step_rename(csv_path, dry_run=args.dry_run)
 
     elapsed = time.time() - start
     print(f"\n{'='*60}")
