@@ -387,12 +387,12 @@ uv run title-classifier vision --use-yolo --vlm-frames 15 -p gcli
 
 **关键词格式**（水印博主名最优先）：
 ```
-Sexy Yuki, 黑色丝袜, 红色羽毛装饰, 黑色蕾丝内衣, 跪姿, 蹲姿, 弯腰, 坐姿
+标签1，标签2……
 ```
 
 **final_name格式**：
 ```
-[Sexy Yuki_黑色丝袜_红色羽毛装饰_黑色蕾丝内衣_跪姿_蹲姿_弯腰_坐姿]_原文件名.mp4
+[标签_标签1]_原文件名.mp4
 ```
 
 ---
