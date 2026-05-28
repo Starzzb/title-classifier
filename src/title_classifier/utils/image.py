@@ -10,7 +10,7 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
-def compress_image(input_path: str, output_path: str, max_size: int = 800, quality: int = 85) -> bool:
+def compress_image(input_path: str, output_path: str, max_size: int = 640, quality: int = 75) -> bool:
     """压缩图片，保持宽高比"""
     try:
         data = np.fromfile(input_path, dtype=np.uint8)
@@ -33,7 +33,7 @@ def compress_image(input_path: str, output_path: str, max_size: int = 800, quali
         return False
 
 
-def image_to_base64(image_path: str, max_size: int = 800) -> str:
+def image_to_base64(image_path: str, max_size: int = 640) -> str:
     """读取图片并压缩后转base64"""
     try:
         data = np.fromfile(image_path, dtype=np.uint8)
@@ -51,7 +51,7 @@ def image_to_base64(image_path: str, max_size: int = 800) -> str:
             new_h = int(h * scale)
             img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
-        _, buffer = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        _, buffer = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 75])
         result = base64.b64encode(buffer).decode("utf-8")
         
         logger.debug(f"图片转base64: {image_path}, 原始大小={w}x{h}, base64长度={len(result)}")
