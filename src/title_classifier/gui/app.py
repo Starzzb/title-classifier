@@ -104,7 +104,7 @@ class TitleClassifierApp(tk.Tk):
 
     def __init__(self):
         super().__init__()
-        self.title("视频标题分类工具 v6.1")
+        self.title("视频标题分类工具 v7.0")
         self.geometry("900x850")
         self.minsize(800, 700)
 
