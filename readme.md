@@ -102,33 +102,37 @@ uv sync
 
 ### 4. 下载模型文件
 
-#### 4.1 YOLO 模型（推荐）
+#### 一键下载所有模型（推荐）
 
-YOLO 模型会在首次使用时自动下载到 `models/yolo/` 目录。
+```powershell
+uv run python scripts/download_models.py
+```
 
-如需手动下载：
+这会自动下载 YOLO 模型和 CLIP 模型到 `models/` 目录。Silero VAD 模型会在首次使用时自动下载。
+
+#### 手动下载单个模型
+
+**YOLO 模型**（用于姿态检测，推荐）：
+
 ```powershell
 uv run python scripts/download_yolo_models.py
 ```
 
-**可用模型**：
 | 模型 | 大小 | 功能 |
 |------|------|------|
 | `yolov8n.pt` | 6MB | 人体检测 |
 | `yolov8n-pose.pt` | 7MB | 姿态估计 |
 | `yolov8n-seg.pt` | 7MB | 实例分割 |
 
-#### 4.2 UHD 人体检测模型（备选）
+**CLIP 模型**（可选，用于图像预分类）：
 
-模型文件已包含在项目中：`models/human_detection/ultratinyod_res_anc8_w128_64x64_loese_distill.onnx`
+```powershell
+uv run python scripts/download_clip.py
+```
 
-#### 4.3 CLIP 模型（可选）
+**Silero VAD 模型**（音频分段）：
 
-CLIP 模型会在首次使用时自动下载到 `models/clip/` 目录。
-
-#### 4.4 Silero VAD 模型（音频分段）
-
-Silero VAD 模型会在首次使用时自动下载。依赖已包含在 `pyproject.toml` 中。
+无需手动下载，`silero-vad` 包会在首次使用时自动下载模型。
 
 ### 5. 配置 AI API
 
@@ -637,11 +641,12 @@ title-classifier/
 │   └── providers.example.json       # Provider配置示例
 │
 ├── models/
-│   ├── clip/                        # CLIP模型
-│   ├── human_detection/             # UHD模型
-│   └── yolo/                        # YOLO模型
+│   ├── clip/                        # CLIP模型（自动下载）
+│   ├── human_detection/             # UHD模型（已移除，不再使用）
+│   └── yolo/                        # YOLO模型（自动下载）
 │
 ├── scripts/
+│   ├── download_models.py           # 一键下载所有模型
 │   ├── download_clip.py
 │   └── download_yolo_models.py
 │
