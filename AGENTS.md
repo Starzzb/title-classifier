@@ -2,7 +2,7 @@
 
 ### Issue tracker
 
-GitHub Issues (Starzzb/tittle-classfication). See `docs/agents/issue-tracker.md`.
+GitHub Issues (Starzzb/title-classifier). See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 

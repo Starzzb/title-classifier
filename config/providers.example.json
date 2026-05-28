@@ -1,0 +1,30 @@
+{
+  "_comment": "这是配置示例文件，参考格式后删除此文件",
+  "_说明": "只需要写想修改的字段，其他字段会继承py文件默认值",
+  
+  "mimo": {
+    "default_model": "mimo-v2-omni"
+  },
+
+  "_示例1_修改多个字段": {
+    "mimo": {
+      "default_model": "mimo-v2-omni",
+      "url": "https://api.xiaomimimo.com/v1/chat/completions"
+    }
+  },
+
+  "_示例2_添加新Provider": {
+    "my_provider": {
+      "name": "我的Provider",
+      "type": "multi",
+      "url": "https://api.example.com/v1/chat/completions",
+      "env_key": "MY_API_KEY",
+      "default_model": "my-model",
+      "requires_api_key": true,
+      "supports_1b": true,
+      "supports_1c": true,
+      "supports_audio": false,
+      "description": "自定义Provider描述"
+    }
+  }
+}

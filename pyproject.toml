@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "title-classifier"
-version = "6.0.0"
+version = "6.1.0"
 description = "视频标题分类和重命名工具"
 readme = "README.md"
 requires-python = ">=3.10"

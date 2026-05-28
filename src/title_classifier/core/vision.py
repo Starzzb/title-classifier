@@ -978,7 +978,6 @@ class VisionProcessor:
         title: str,
         original_title: str = None,
         srt_output_dir: str = "data/output/subtitles",
-        generate_audio: bool = False,
     ) -> Dict:
         """
         处理视频并生成所有结果
@@ -988,7 +987,6 @@ class VisionProcessor:
             title: 标题
             original_title: 原始文件名（用于生成final_name）
             srt_output_dir: SRT输出目录
-            generate_audio: 是否生成音频字幕（已废弃，保留兼容性）
         
         Returns:
             {

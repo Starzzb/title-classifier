@@ -16,6 +16,7 @@ from ..providers import (
     get_providers_for_gui, call_text_api, test_provider_connection,
 )
 from ..core.refiner import Refiner
+from ..utils.muxer import SubtitleMuxer
 
 PROJECT_DIR = Path(__file__).parent.parent.parent.parent.resolve()
 PYTHON = sys.executable
@@ -103,7 +104,7 @@ class TitleClassifierApp(tk.Tk):
 
     def __init__(self):
         super().__init__()
-        self.title("视频标题分类工具 v6.0")
+        self.title("视频标题分类工具 v6.1")
         self.geometry("900x850")
         self.minsize(800, 700)
 
@@ -618,6 +619,104 @@ class TitleClassifierApp(tk.Tk):
                 "- 保存VLM输入帧和Prompt\n"
                 "- 保存VLM响应\n"
                 "- 处理完成后自动打开调试窗口")
+
+        # 废弃提醒
+        deprecation_frame = ttk.Frame(tab)
+        deprecation_frame.pack(fill=tk.X, padx=4, pady=4)
+        deprecation_label = ttk.Label(
+            deprecation_frame,
+            text="注意：音频识别功能已转移到独立的 'Stage1c 音频识别' 标签页",
+            foreground="red",
+            font=("Microsoft YaHei", 9, "bold")
+        )
+        deprecation_label.pack(side=tk.LEFT, padx=4)
+        ToolTip(deprecation_label, "vision命令的--audio参数已废弃\n\n"
+                "音频识别现在由独立的audio子命令提供\n"
+                "请使用 'Stage1c 音频识别' 标签页进行音频识别")
+
+        # 字幕封装选项
+        mux_frame = ttk.LabelFrame(tab, text="字幕封装")
+        mux_frame.pack(fill=tk.X, padx=4, pady=4)
+
+        # 提示信息
+        mux_tip = ttk.Label(
+            mux_frame,
+            text="注意：封装字幕需要先运行音频识别，产出字幕文件",
+            foreground="blue",
+            font=("Microsoft YaHei", 8)
+        )
+        mux_tip.pack(fill=tk.X, padx=4, pady=2)
+
+        # 第一行：封装开关和输出格式
+        mux_row1 = ttk.Frame(mux_frame)
+        mux_row1.pack(fill=tk.X, padx=4, pady=2)
+
+        self.s1c_mux_enabled_var = tk.BooleanVar(value=False)
+        mux_cb = ttk.Checkbutton(mux_row1, text="启用字幕封装", variable=self.s1c_mux_enabled_var)
+        mux_cb.pack(side=tk.LEFT, padx=4)
+        ToolTip(mux_cb, "在视觉识别后自动将字幕封装到视频中\n\n"
+                "需要先运行音频识别生成字幕文件\n"
+                "封装后的视频会保存在原目录")
+
+        ttk.Label(mux_row1, text="输出格式:").pack(side=tk.LEFT, padx=8)
+        self.s1c_mux_format_var = tk.StringVar(value="auto")
+        format_combo = ttk.Combobox(mux_row1, textvariable=self.s1c_mux_format_var, 
+                                   values=["auto", "mkv", "mp4"], state="readonly", width=8)
+        format_combo.pack(side=tk.LEFT, padx=4)
+        ToolTip(format_combo, "选择输出视频格式\n\n"
+                "- auto: 保持原视频格式\n"
+                "- mkv: MKV容器（推荐，支持SRT无损封装）\n"
+                "- mp4: MP4容器（SRT会转为mov_text格式）")
+
+        # 第二行：文件处理和字幕处理
+        mux_row2 = ttk.Frame(mux_frame)
+        mux_row2.pack(fill=tk.X, padx=4, pady=2)
+
+        ttk.Label(mux_row2, text="文件处理:").pack(side=tk.LEFT, padx=4)
+        self.s1c_mux_handling_var = tk.StringVar(value="new")
+        handling_combo = ttk.Combobox(mux_row2, textvariable=self.s1c_mux_handling_var,
+                                     values=["new", "overwrite"], state="readonly", width=10)
+        handling_combo.pack(side=tk.LEFT, padx=4)
+        ToolTip(handling_combo, "选择文件处理方式\n\n"
+                "- new: 创建新文件（原文件名_muxed.扩展名）\n"
+                "- overwrite: 覆盖原文件（谨慎使用）")
+
+        ttk.Label(mux_row2, text="字幕处理:").pack(side=tk.LEFT, padx=8)
+        self.s1c_mux_processing_var = tk.StringVar(value="direct")
+        processing_combo = ttk.Combobox(mux_row2, textvariable=self.s1c_mux_processing_var,
+                                       values=["direct", "convert"], state="readonly", width=8)
+        processing_combo.pack(side=tk.LEFT, padx=4)
+        ToolTip(processing_combo, "选择字幕处理方式\n\n"
+                "- direct: 直接封装SRT文件\n"
+                "- convert: 转换为UTF-8编码后封装")
+
+        # 第三行：封装按钮和重试按钮
+        mux_row3 = ttk.Frame(mux_frame)
+        mux_row3.pack(fill=tk.X, padx=4, pady=4)
+
+        mux_btn = ttk.Button(mux_row3, text="封装字幕", command=self._run_mux_subtitle)
+        mux_btn.pack(side=tk.LEFT, padx=4)
+        ToolTip(mux_btn, "将字幕封装到视频中\n\n"
+                "操作步骤：\n"
+                "1. 确保已运行音频识别生成字幕文件\n"
+                "2. 确保已运行视觉识别生成final_name\n"
+                "3. 点击此按钮执行封装")
+
+        retry_btn = ttk.Button(mux_row3, text="重试失败", command=self._retry_failed_mux)
+        retry_btn.pack(side=tk.LEFT, padx=4)
+        ToolTip(retry_btn, "重试之前失败的封装操作\n\n"
+                "如果封装过程中有文件失败，\n"
+                "可以点击此按钮重新尝试")
+
+        # 进度条
+        self.s1c_mux_progress_var = tk.DoubleVar(value=0.0)
+        mux_progress = ttk.Progressbar(mux_frame, variable=self.s1c_mux_progress_var, maximum=100)
+        mux_progress.pack(fill=tk.X, padx=4, pady=2)
+
+        # 状态标签
+        self.s1c_mux_status_var = tk.StringVar(value="就绪")
+        mux_status = ttk.Label(mux_frame, textvariable=self.s1c_mux_status_var)
+        mux_status.pack(fill=tk.X, padx=4, pady=2)
 
         # 执行按钮
         btn_frame = ttk.Frame(tab)
@@ -1479,6 +1578,177 @@ class TitleClassifierApp(tk.Tk):
             
         except Exception as e:
             print(f"[警告] 加载音频配置失败: {e}")
+
+    def _run_mux_subtitle(self):
+        """运行字幕封装"""
+        # 检查是否启用封装
+        if not self.s1c_mux_enabled_var.get():
+            print("[提示] 字幕封装未启用，请在'字幕封装'区域勾选'启用字幕封装'")
+            return
+        
+        csv_path = self.s1c_csv_var.get()
+        if not Path(csv_path).exists():
+            messagebox.showwarning("警告", "CSV文件不存在")
+            return
+        
+        # 获取配置
+        config = {
+            "output_format": self.s1c_mux_format_var.get(),
+            "file_handling": self.s1c_mux_handling_var.get(),
+            "subtitle_processing": self.s1c_mux_processing_var.get(),
+        }
+        
+        # 在后台线程中运行封装
+        def run_mux_task():
+            try:
+                # 导入必要的模块
+                import csv
+                from ..utils.muxer import SubtitleMuxer
+                
+                # 初始化封装器
+                muxer = SubtitleMuxer(config)
+                
+                # 读取CSV
+                with open(csv_path, "r", encoding="utf-8-sig") as f:
+                    reader = csv.DictReader(f)
+                    rows = list(reader)
+                
+                if not rows:
+                    print("[警告] CSV为空")
+                    return
+                
+                # 查找需要封装的文件对
+                video_srt_pairs = []
+                srt_dir = str(Path(csv_path).parent / "subtitles")
+                
+                for row in rows:
+                    original_path = row.get("original_path", "").strip()
+                    final_name = row.get("final_name", "").strip()
+                    srt_path = row.get("srt_path", "").strip()
+                    
+                    if not original_path or not Path(original_path).exists():
+                        continue
+                    
+                    # 确定字幕文件路径
+                    if srt_path and Path(srt_path).exists():
+                        # 使用CSV中记录的字幕路径
+                        pass
+                    else:
+                        # 尝试查找同名字幕文件
+                        if final_name:
+                            srt_name = Path(final_name).stem + ".srt"
+                            srt_path = str(Path(srt_dir) / srt_name)
+                        else:
+                            srt_name = Path(original_path).stem + ".srt"
+                            srt_path = str(Path(srt_dir) / srt_name)
+                    
+                    if Path(srt_path).exists():
+                        video_srt_pairs.append((original_path, srt_path))
+                    else:
+                        print(f"[跳过] 未找到字幕文件: {Path(original_path).name}")
+                
+                if not video_srt_pairs:
+                    print("[警告] 未找到需要封装的文件对")
+                    return
+                
+                print(f"[开始] 共 {len(video_srt_pairs)} 个文件需要封装")
+                
+                # 更新进度条
+                def progress_callback(progress, status):
+                    self.s1c_mux_progress_var.set(progress)
+                    self.s1c_mux_status_var.set(status)
+                    self.update_idletasks()
+                
+                # 执行批量封装
+                result = muxer.batch_mux(video_srt_pairs, progress_callback)
+                
+                # 显示结果
+                if result["success"]:
+                    print(f"[完成] 批量封装成功: {result['success_count']} 个文件")
+                    messagebox.showinfo("完成", f"批量封装成功: {result['success_count']} 个文件")
+                else:
+                    print(f"[警告] 批量封装完成: 成功 {result['success_count']}, 失败 {result['failed_count']}")
+                    
+                    # 保存失败文件列表，供重试使用
+                    self._failed_mux_files = result["failed_files"]
+                    
+                    if result["failed_files"]:
+                        print("[失败文件列表]")
+                        for file_info in result["failed_files"]:
+                            print(f"  - {Path(file_info['video']).name}: {file_info['error']}")
+                    
+                    messagebox.showwarning("完成", 
+                                          f"批量封装完成: 成功 {result['success_count']}, 失败 {result['failed_count']}\n"
+                                          f"失败文件已记录，可点击'重试失败'按钮重试")
+                
+            except Exception as e:
+                print(f"[错误] 字幕封装失败: {e}")
+                messagebox.showerror("错误", f"字幕封装失败: {e}")
+        
+        # 启动后台线程
+        thread = threading.Thread(target=run_mux_task, daemon=True)
+        thread.start()
+
+    def _retry_failed_mux(self):
+        """重试失败的封装操作"""
+        if not hasattr(self, '_failed_mux_files') or not self._failed_mux_files:
+            print("[提示] 没有失败的封装操作需要重试")
+            messagebox.showinfo("提示", "没有失败的封装操作需要重试")
+            return
+        
+        # 获取配置
+        config = {
+            "output_format": self.s1c_mux_format_var.get(),
+            "file_handling": self.s1c_mux_handling_var.get(),
+            "subtitle_processing": self.s1c_mux_processing_var.get(),
+        }
+        
+        # 在后台线程中运行重试
+        def run_retry_task():
+            try:
+                from ..utils.muxer import SubtitleMuxer
+                
+                # 初始化封装器
+                muxer = SubtitleMuxer(config)
+                
+                print(f"[开始] 重试 {len(self._failed_mux_files)} 个失败文件")
+                
+                # 更新进度条
+                def progress_callback(progress, status):
+                    self.s1c_mux_progress_var.set(progress)
+                    self.s1c_mux_status_var.set(status)
+                    self.update_idletasks()
+                
+                # 执行重试
+                result = muxer.retry_failed(self._failed_mux_files, progress_callback)
+                
+                # 显示结果
+                if result["success"]:
+                    print(f"[完成] 重试成功: {result['success_count']} 个文件")
+                    messagebox.showinfo("完成", f"重试成功: {result['success_count']} 个文件")
+                    # 清空失败列表
+                    self._failed_mux_files = []
+                else:
+                    print(f"[警告] 重试完成: 成功 {result['success_count']}, 失败 {result['failed_count']}")
+                    
+                    # 更新失败文件列表
+                    self._failed_mux_files = [
+                        {"video": r["video"], "srt": r["srt"], "error": r["result"]["error"]}
+                        for r in result["results"]
+                        if not r["result"]["success"]
+                    ]
+                    
+                    messagebox.showwarning("完成", 
+                                          f"重试完成: 成功 {result['success_count']}, 失败 {result['failed_count']}\n"
+                                          f"仍有 {len(self._failed_mux_files)} 个文件失败")
+                
+            except Exception as e:
+                print(f"[错误] 重试失败: {e}")
+                messagebox.showerror("错误", f"重试失败: {e}")
+        
+        # 启动后台线程
+        thread = threading.Thread(target=run_retry_task, daemon=True)
+        thread.start()
 
     def _batch_confirm(self):
         """批量确认所有记录"""

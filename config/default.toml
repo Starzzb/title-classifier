@@ -87,3 +87,15 @@ max_subtitle_duration = 10
 max_subtitle_chars = 100
 filter_invalid = true
 format_text = true
+
+[mux]
+enabled = false
+auto_mux = false
+output_format = "auto"  # auto, mkv, mp4
+file_handling = "new"   # new, overwrite
+subtitle_processing = "direct"  # direct, convert
+encoding = "utf-8"
+language_detection = true
+track_naming = "auto"   # auto, manual
+default_track = true
+retry_failed = true
