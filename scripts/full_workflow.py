@@ -8,11 +8,13 @@
     python scripts/full_workflow.py "D:/aria2/love"
     python scripts/full_workflow.py "D:/aria2/love" --dry-run  # 仅模拟重命名
 
-多开并行: 每个目录自动分配独立 CSV，可同时运行多个窗口
+多开并行: 每个目录自动分配独立 CSV 和日志，可同时运行多个窗口
     python scripts/full_workflow.py "D:/aria2/love"
     python scripts/full_workflow.py "D:/aria2/anime"  # 另一个窗口
 
 断点续跑: 中途中断后重新运行同一目录，会自动跳过已完成的步骤
+
+日志输出: 每个目录独立日志文件 data/output/<目录名>/workflow.log
 """
 
 import sys
@@ -27,30 +29,47 @@ PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 
-def get_csv_path(target_dir: str) -> str:
-    """根据目标目录生成唯一的 CSV 路径，避免多实例冲突"""
+def get_output_dir(target_dir: str) -> Path:
+    """根据目标目录生成唯一的输出目录"""
     dir_name = Path(target_dir).resolve().name
-    csv_dir = PROJECT_ROOT / "data" / "output" / dir_name
-    csv_dir.mkdir(parents=True, exist_ok=True)
-    return str(csv_dir / "title_review.csv")
+    output_dir = PROJECT_ROOT / "data" / "output" / dir_name
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir
 
 
-def run_cmd(args: list, desc: str):
-    """运行 CLI 命令并打印输出（无超时限制）"""
-    print(f"\n{'='*60}")
-    print(f"[步骤] {desc}")
-    print(f"  命令: {' '.join(str(a) for a in args)}")
-    print(f"{'='*60}\n")
+def run_cmd(args: list, desc: str, log_path: Path):
+    """运行 CLI 命令，实时输出到控制台和日志文件"""
+    header = f"\n{'='*60}\n[步骤] {desc}\n  命令: {' '.join(str(a) for a in args)}\n{'='*60}\n"
+    print(header)
 
-    result = subprocess.run(
-        [str(a) for a in args],
-        cwd=str(PROJECT_ROOT),
-        encoding="utf-8",
-        errors="replace",
-    )
-    if result.returncode != 0:
-        print(f"[警告] 命令返回非零退出码: {result.returncode}")
-    return result.returncode
+    with open(log_path, "a", encoding="utf-8") as log_f:
+        log_f.write(header)
+        log_f.flush()
+
+        proc = subprocess.Popen(
+            [str(a) for a in args],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            cwd=str(PROJECT_ROOT),
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+        )
+
+        for line in proc.stdout:
+            print(line, end="")
+            log_f.write(line)
+            log_f.flush()
+
+        proc.wait()
+
+        if proc.returncode != 0:
+            warn = f"[警告] 命令返回非零退出码: {proc.returncode}\n"
+            print(warn)
+            log_f.write(warn)
+            log_f.flush()
+
+    return proc.returncode
 
 
 def read_csv(csv_path: str) -> list:
@@ -70,7 +89,7 @@ def check_audio_done(csv_path: str) -> bool:
     video_ext = {".mp4", ".mkv", ".avi", ".mov", ".flv", ".wmv", ".webm", ".m4v", ".ts"}
     video_rows = [r for r in rows if Path(r.get("original_path", "")).suffix.lower() in video_ext]
     if not video_rows:
-        return True  # 没有视频文件，跳过音频
+        return True
     return all(r.get("audio_recognized", "").strip().lower() == "true" for r in video_rows)
 
 
@@ -82,7 +101,7 @@ def check_vision_done(csv_path: str) -> bool:
     return all(r.get("vision_keywords", "").strip() for r in rows)
 
 
-def step_scan(target_dir: str, csv_path: str):
+def step_scan(target_dir: str, csv_path: str, log_path: Path):
     """Step 1: 扫描目录"""
     cmd = [
         sys.executable, "-m", "title_classifier", "scan",
@@ -90,41 +109,49 @@ def step_scan(target_dir: str, csv_path: str):
         "-o", csv_path,
         "--force",
     ]
-    return run_cmd(cmd, f"扫描目录: {target_dir}")
+    return run_cmd(cmd, f"扫描目录: {target_dir}", log_path)
 
 
-def step_audio(csv_path: str):
+def step_audio(csv_path: str, log_path: Path):
     """Step 2: 音频识别（带断点续跑检测）"""
     if check_audio_done(csv_path):
-        print("\n[跳过] 音频识别已完成，无需重复执行")
+        msg = "\n[跳过] 音频识别已完成，无需重复执行\n"
+        print(msg)
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(msg)
         return 0
 
     cmd = [
         sys.executable, "-m", "title_classifier", "audio",
-        "--all", "-p", "mimo", "-c", csv_path,
+        "--all", "-p", "mimo", "-c", csv_path, "--log", str(log_path),
     ]
-    return run_cmd(cmd, "音频识别 (mimo)")
+    return run_cmd(cmd, "音频识别 (mimo)", log_path)
 
 
-def step_vision(csv_path: str):
+def step_vision(csv_path: str, log_path: Path):
     """Step 3: 视觉识别（带断点续跑检测）"""
     if check_vision_done(csv_path):
-        print("\n[跳过] 视觉识别已完成，无需重复执行")
+        msg = "\n[跳过] 视觉识别已完成，无需重复执行\n"
+        print(msg)
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(msg)
         return 0
 
     cmd = [
         sys.executable, "-m", "title_classifier", "vision",
         "--all", "-p", "gcli", "--use-yolo", "--comprehensive",
-        "-c", csv_path,
+        "-c", csv_path, "--log", str(log_path),
     ]
-    return run_cmd(cmd, "视觉识别 (gcli + YOLO全面分析)")
+    return run_cmd(cmd, "视觉识别 (gcli + YOLO全面分析)", log_path)
 
 
-def step_mux_subtitles(csv_path: str):
+def step_mux_subtitles(csv_path: str, log_path: Path):
     """Step 4: 字幕封装到视频"""
-    print(f"\n{'='*60}")
-    print(f"[步骤] 字幕封装")
-    print(f"{'='*60}\n")
+    header = f"\n{'='*60}\n[步骤] 字幕封装\n{'='*60}\n"
+    print(header)
+    with open(log_path, "a", encoding="utf-8") as f:
+        f.write(header)
+        f.flush()
 
     env_path = PROJECT_ROOT / ".env"
     if env_path.exists():
@@ -145,71 +172,88 @@ def step_mux_subtitles(csv_path: str):
 
     rows = read_csv(csv_path)
     if not rows:
-        print("[警告] CSV 为空，跳过字幕封装")
+        msg = "[警告] CSV 为空，跳过字幕封装\n"
+        print(msg)
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(msg)
         return 0
 
     srt_dir = str(Path(csv_path).parent / "subtitles")
     success = 0
     skipped = 0
 
-    for row in rows:
-        original_path = row.get("original_path", "").strip()
-        srt_path = row.get("srt_path", "").strip()
+    with open(log_path, "a", encoding="utf-8") as log_f:
+        for row in rows:
+            original_path = row.get("original_path", "").strip()
+            srt_path = row.get("srt_path", "").strip()
 
-        if not original_path or not Path(original_path).exists():
-            skipped += 1
-            continue
-
-        if not srt_path:
-            skipped += 1
-            continue
-
-        VIDEO_EXT = {".mp4", ".mkv", ".avi", ".mov", ".flv", ".wmv", ".webm", ".m4v", ".ts"}
-        if Path(original_path).suffix.lower() not in VIDEO_EXT:
-            skipped += 1
-            continue
-
-        if not Path(srt_path).is_absolute():
-            srt_full = Path(srt_dir) / Path(srt_path).name
-        else:
-            srt_full = Path(srt_path)
-
-        if not srt_full.exists():
-            srt_same_dir = Path(original_path).with_suffix(".srt")
-            if srt_same_dir.exists():
-                srt_full = srt_same_dir
-            else:
-                print(f"  [跳过] SRT 不存在: {srt_full}")
+            if not original_path or not Path(original_path).exists():
                 skipped += 1
                 continue
 
-        # 检查是否已封装过（视频同目录下已有同名 mkv）
-        VIDEO_OUT_EXT = {".mkv", ".mp4"}
-        existing = [f for f in Path(original_path).parent.iterdir()
-                    if f.is_file() and f.suffix.lower() in VIDEO_OUT_EXT
-                    and Path(original_path).stem in f.name and f != Path(original_path)]
-        if existing:
-            print(f"  [跳过] 已存在封装文件: {existing[0].name}")
-            skipped += 1
-            continue
+            if not srt_path:
+                skipped += 1
+                continue
 
-        result = muxer.mux_subtitle(original_path, str(srt_full))
-        if result.get("success"):
-            output = result.get("output_path", "")
-            print(f"  [完成] {Path(original_path).name} -> {Path(output).name if output else '?'}")
-            success += 1
-        else:
-            print(f"  [失败] {Path(original_path).name}: {result.get('error', '未知错误')}")
+            VIDEO_EXT = {".mp4", ".mkv", ".avi", ".mov", ".flv", ".wmv", ".webm", ".m4v", ".ts"}
+            if Path(original_path).suffix.lower() not in VIDEO_EXT:
+                skipped += 1
+                continue
 
-    print(f"\n[字幕封装统计] 成功={success}, 跳过={skipped}")
+            if not Path(srt_path).is_absolute():
+                srt_full = Path(srt_dir) / Path(srt_path).name
+            else:
+                srt_full = Path(srt_path)
+
+            if not srt_full.exists():
+                srt_same_dir = Path(original_path).with_suffix(".srt")
+                if srt_same_dir.exists():
+                    srt_full = srt_same_dir
+                else:
+                    msg = f"  [跳过] SRT 不存在: {srt_full}\n"
+                    print(msg, end="")
+                    log_f.write(msg)
+                    skipped += 1
+                    continue
+
+            VIDEO_OUT_EXT = {".mkv", ".mp4"}
+            existing = [f for f in Path(original_path).parent.iterdir()
+                        if f.is_file() and f.suffix.lower() in VIDEO_OUT_EXT
+                        and Path(original_path).stem in f.name and f != Path(original_path)]
+            if existing:
+                msg = f"  [跳过] 已存在封装文件: {existing[0].name}\n"
+                print(msg, end="")
+                log_f.write(msg)
+                skipped += 1
+                continue
+
+            result = muxer.mux_subtitle(original_path, str(srt_full))
+            if result.get("success"):
+                output = result.get("output_path", "")
+                msg = f"  [完成] {Path(original_path).name} -> {Path(output).name if output else '?'}\n"
+                print(msg, end="")
+                log_f.write(msg)
+                success += 1
+            else:
+                msg = f"  [失败] {Path(original_path).name}: {result.get('error', '未知错误')}\n"
+                print(msg, end="")
+                log_f.write(msg)
+
+        summary = f"\n[字幕封装统计] 成功={success}, 跳过={skipped}\n"
+        print(summary)
+        log_f.write(summary)
+        log_f.flush()
+
     return 0
 
 
-def step_confirm_all(csv_path: str):
+def step_confirm_all(csv_path: str, log_path: Path):
     """Step 5: 将所有待确认记录标记为已确认"""
-    print(f"\n{'='*60}")
-    print(f"[步骤] 确认所有记录")
-    print(f"{'='*60}\n")
+    header = f"\n{'='*60}\n[步骤] 确认所有记录\n{'='*60}\n"
+    print(header)
+    with open(log_path, "a", encoding="utf-8") as f:
+        f.write(header)
+        f.flush()
 
     with open(csv_path, "r", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
@@ -230,17 +274,20 @@ def step_confirm_all(csv_path: str):
         writer.writeheader()
         writer.writerows(rows)
 
-    print(f"  已确认 {confirmed} 条记录 (共 {len(rows)} 条)")
+    msg = f"  已确认 {confirmed} 条记录 (共 {len(rows)} 条)\n"
+    print(msg)
+    with open(log_path, "a", encoding="utf-8") as f:
+        f.write(msg)
     return 0
 
 
-def step_rename(csv_path: str, dry_run: bool = False):
+def step_rename(csv_path: str, log_path: Path, dry_run: bool = False):
     """Step 6: 执行重命名"""
     mode = "模拟重命名" if dry_run else "执行重命名"
     cmd = [sys.executable, "-m", "title_classifier", "rename", "-c", csv_path]
     if dry_run:
         cmd.append("--dry-run")
-    return run_cmd(cmd, mode)
+    return run_cmd(cmd, mode, log_path)
 
 
 def main():
@@ -257,37 +304,49 @@ def main():
         print(f"[错误] 目录不存在: {target_dir}")
         sys.exit(1)
 
-    csv_path = get_csv_path(str(target_dir))
+    # 输出目录：每个目标目录独立
+    output_dir = get_output_dir(str(target_dir))
+    csv_path = str(output_dir / "title_review.csv")
+    log_path = output_dir / "workflow.log"
+
+    # 写入日志头部
+    start = time.time()
+    with open(log_path, "w", encoding="utf-8") as f:
+        f.write(f"[工作流启动] 目录: {target_dir}\n")
+        f.write(f"[CSV] {csv_path}\n")
+        f.write(f"[日志] {log_path}\n")
+        f.write(f"[时间] {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+
     print(f"[目录] {target_dir}")
     print(f"[CSV]  {csv_path}")
-
-    start = time.time()
+    print(f"[日志] {log_path}")
 
     # Step 1: 扫描
-    step_scan(str(target_dir), csv_path)
+    step_scan(str(target_dir), csv_path, log_path)
 
     # Step 2: 音频识别
     if not args.skip_audio:
-        step_audio(csv_path)
+        step_audio(csv_path, log_path)
 
     # Step 3: 视觉识别
     if not args.skip_vision:
-        step_vision(csv_path)
+        step_vision(csv_path, log_path)
 
     # Step 4: 字幕封装
     if not args.skip_mux:
-        step_mux_subtitles(csv_path)
+        step_mux_subtitles(csv_path, log_path)
 
     # Step 5: 确认所有记录
-    step_confirm_all(csv_path)
+    step_confirm_all(csv_path, log_path)
 
     # Step 6: 重命名
-    step_rename(csv_path, dry_run=args.dry_run)
+    step_rename(csv_path, log_path, dry_run=args.dry_run)
 
     elapsed = time.time() - start
-    print(f"\n{'='*60}")
-    print(f"[完成] 总耗时: {elapsed/60:.1f} 分钟")
-    print(f"{'='*60}")
+    footer = f"\n{'='*60}\n[完成] 总耗时: {elapsed/60:.1f} 分钟\n{'='*60}\n"
+    print(footer)
+    with open(log_path, "a", encoding="utf-8") as f:
+        f.write(footer)
 
 
 if __name__ == "__main__":

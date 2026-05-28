@@ -19,13 +19,18 @@ if sys.platform == "win32":
 from .core import Scanner, Refiner, VisionProcessor, Renamer
 
 
-def setup_logging(verbose: bool = False):
+def setup_logging(verbose: bool = False, log_file: str = None):
     """设置日志"""
     level = logging.DEBUG if verbose else logging.INFO
+    handlers = [logging.StreamHandler()]
+    if log_file:
+        Path(log_file).parent.mkdir(parents=True, exist_ok=True)
+        handlers.append(logging.FileHandler(log_file, encoding="utf-8"))
     logging.basicConfig(
         level=level,
         format="%(asctime)s [%(levelname)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
+        handlers=handlers,
     )
 
 
@@ -382,6 +387,7 @@ def main():
         description="视频标题分类和重命名工具",
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="详细输出")
+    parser.add_argument("--log", help="日志文件路径（不指定则只输出到控制台）")
 
     subparsers = parser.add_subparsers(dest="command", help="可用命令")
 
@@ -442,7 +448,7 @@ def main():
         parser.print_help()
         return
 
-    setup_logging(args.verbose)
+    setup_logging(args.verbose, args.log)
     args.func(args)
 
 
