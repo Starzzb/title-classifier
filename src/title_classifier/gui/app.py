@@ -277,7 +277,7 @@ class TitleClassifierApp(tk.Tk):
         provider_frame = ttk.LabelFrame(tab, text="AI Provider")
         provider_frame.pack(fill=tk.X, padx=4, pady=4)
 
-        self.s1b_provider_var = tk.StringVar(value="ollama")
+        self.s1b_provider_var = tk.StringVar(value="gcli")
         providers = get_providers_for_gui("1b")
         provider_combo = ttk.Combobox(provider_frame, textvariable=self.s1b_provider_var, values=providers, state="readonly")
         provider_combo.pack(side=tk.LEFT, padx=4)

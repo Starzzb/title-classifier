@@ -354,6 +354,7 @@ def _call_openai_compatible_api(
         "messages": [{"role": "user", "content": prompt}],
         "stream": False,
         "temperature": temperature,
+        "reasoning": {"enabled": False},
     }
     req = urllib.request.Request(
         api_url,
