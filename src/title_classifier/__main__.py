@@ -405,7 +405,7 @@ def main():
     vision_cmd.add_argument("--yolo-conf", type=float, default=0.5, help="YOLO置信度阈值")
     vision_cmd.add_argument("--use-clip", action="store_true", help="使用CLIP预分类")
     vision_cmd.add_argument("--clip-threshold", type=float, default=0.25, help="CLIP置信度阈值")
-    vision_cmd.add_argument("--max-image-size", type=int, default=640, help="图片最大尺寸")
+    vision_cmd.add_argument("--max-image-size", type=int, default=480, help="图片最大尺寸")
     vision_cmd.add_argument("--vlm-frames", type=int, default=10, help="VLM帧数（由采样间隔决定）")
     vision_cmd.add_argument("--analysis-step", type=float, default=2.0, help="YOLO模式采样间隔（秒，默认2秒）")
 
