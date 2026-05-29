@@ -120,6 +120,7 @@ class TitleClassifierApp(tk.Tk):
         self._build_ui()
         self._load_audio_config_to_gui()
         self._sync_csv()
+        self._bind_csv_traces()
 
     def _load_env(self):
         """加载.env文件"""
@@ -143,21 +144,49 @@ class TitleClassifierApp(tk.Tk):
         main_frame = ttk.Frame(self)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
 
-        self.notebook = ttk.Notebook(main_frame)
+        # CSV状态栏 + 并发提示
+        csv_bar = ttk.Frame(main_frame)
+        csv_bar.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(csv_bar, text="当前CSV:").pack(side=tk.LEFT)
+        csv_display = ttk.Label(csv_bar, textvariable=self.csv_var, foreground="#6688cc")
+        csv_display.pack(side=tk.LEFT, padx=(2, 8))
+        hint_label = ttk.Label(
+            csv_bar,
+            text="💡 各阶段可同时运行，确保CSV文件路径一致即可",
+            foreground="#888888",
+            font=("Microsoft YaHei", 8),
+        )
+        hint_label.pack(side=tk.LEFT)
+        ToolTip(hint_label, (
+            "并发说明：\n"
+            "- 每个阶段启动时锁定CSV路径，运行中切换不影响已启动的任务\n"
+            "- 不同标签页可以同时运行，各自读写不同列\n"
+            "- 注意：运行中请勿在Stage1b右键切换 needs_vision/audio_recognized，可能与正在写入的任务冲突"
+        ))
+
+        # 可调大小的上下分栏：上=标签页，下=日志
+        pane = ttk.PanedWindow(main_frame, orient=tk.VERTICAL)
+        pane.pack(fill=tk.BOTH, expand=True)
+
+        # 上半部分：标签页
+        notebook_frame = ttk.Frame(pane)
+        pane.add(notebook_frame, weight=3)
+
+        self.notebook = ttk.Notebook(notebook_frame)
         self.notebook.pack(fill=tk.BOTH, expand=True)
 
         self._build_stage1_tab()
         self._build_stage1b_tab()
-        self._build_stage1c_audio_tab()  # 新增：音频识别标签页
+        self._build_stage1c_audio_tab()
         self._build_stage1c_tab()
         self._build_stage2_tab()
 
         # 切换标签页时同步CSV
         self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
 
-        # 日志区域
-        log_frame = ttk.LabelFrame(main_frame, text="运行日志")
-        log_frame.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
+        # 下半部分：日志区域（可拖拽调整大小）
+        log_frame = ttk.LabelFrame(pane, text="运行日志")
+        pane.add(log_frame, weight=1)
 
         log_toolbar = ttk.Frame(log_frame)
         log_toolbar.pack(fill=tk.X, padx=4, pady=2)
@@ -190,24 +219,40 @@ class TitleClassifierApp(tk.Tk):
         self.s1c_csv_var.set(csv)
         self.s2_csv_var.set(csv)
 
-    def _on_tab_changed(self, event=None):
-        """切换标签页时同步"""
-        tab = self.notebook.select()
-        tab_name = self.notebook.tab(tab, "text")
-        if "Stage1 " in tab_name:
-            current = self.s1_output_var.get()
-        elif "Stage1b" in tab_name:
-            current = self.s1b_csv_var.get()
-        elif "音频识别" in tab_name:
-            current = self.s1ca_csv_var.get()
-        elif "视觉识别" in tab_name:
-            current = self.s1c_csv_var.get()
-        elif "Stage2" in tab_name:
-            current = self.s2_csv_var.get()
-        else:
+    def _bind_csv_traces(self):
+        """绑定标签页CSV变量变更到状态栏显示"""
+        self._csv_tab_vars = {
+            "Stage1 ": self.s1_output_var,
+            "Stage1b": self.s1b_csv_var,
+            "音频识别": self.s1ca_csv_var,
+            "视觉识别": self.s1c_csv_var,
+            "Stage2": self.s2_csv_var,
+        }
+        for var in self._csv_tab_vars.values():
+            var.trace_add("write", self._on_tab_csv_changed)
+
+    def _on_tab_csv_changed(self, *_):
+        """任一标签页CSV变量变更时，更新状态栏显示当前标签页的值"""
+        try:
+            tab_text = self.notebook.tab(self.notebook.select(), "text")
+        except Exception:
             return
-        self.csv_var.set(current)
-        self._sync_csv()
+        for key, var in self._csv_tab_vars.items():
+            if key in tab_text:
+                self.csv_var.set(var.get())
+                return
+
+    def _on_tab_changed(self, event=None):
+        """切换标签页时更新状态栏显示"""
+        try:
+            tab = self.notebook.select()
+            tab_name = self.notebook.tab(tab, "text")
+        except Exception:
+            return
+        for key, var in self._csv_tab_vars.items():
+            if key in tab_name:
+                self.csv_var.set(var.get())
+                return
 
     def _build_stage1_tab(self):
         """构建Stage1扫描标签页"""

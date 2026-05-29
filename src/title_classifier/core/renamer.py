@@ -11,8 +11,9 @@ logger = logging.getLogger(__name__)
 class Renamer:
     """文件重命名器"""
 
-    def __init__(self, csv_path: str = "data/output/title_review.csv"):
+    def __init__(self, csv_path: str = "data/output/title_review.csv", db_store=None):
         self.csv_path = Path(csv_path)
+        self.db_store = db_store
 
     def rename(self, dry_run: bool = False) -> Dict:
         """
@@ -71,20 +72,32 @@ class Renamer:
             # 执行重命名
             if dry_run:
                 logger.info(f"[模拟] {original_path.name} -> {new_path.name}")
-                # 模拟SRT重命名
                 self._rename_srt(original_path, new_path, task.get("srt_path", ""), dry_run=True)
             else:
                 try:
                     original_path.rename(new_path)
                     logger.info(f"[重命名] {original_path.name} -> {new_path.name}")
                     stats["success"] += 1
-                    # 同步重命名SRT文件
                     self._rename_srt(original_path, new_path, task.get("srt_path", ""), dry_run=False)
+                    # 同步到数据库
+                    self._sync_to_db(str(original_path), str(new_path))
                 except Exception as e:
                     logger.error(f"重命名失败: {e}")
                     stats["error"] += 1
 
         return stats
+
+    def _sync_to_db(self, old_path: str, new_path: str):
+        """重命名后同步到数据库"""
+        if not self.db_store:
+            return
+        try:
+            media = self.db_store.find_by_path(old_path)
+            if media:
+                self.db_store.update_media(media["id"], "current_path", new_path, "rename")
+                logger.debug(f"数据库路径更新: {old_path} -> {new_path}")
+        except Exception as e:
+            logger.warning(f"数据库同步失败: {e}")
 
     def _rename_srt(self, original_path: Path, new_path: Path, srt_path: str = "", dry_run: bool = False):
         """

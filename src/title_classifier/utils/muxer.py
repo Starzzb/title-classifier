@@ -97,6 +97,21 @@ class SubtitleMuxer:
             result = self._execute_ffmpeg(cmd, progress_callback)
             
             if result["success"]:
+                # overwrite模式：用临时文件替换原文件
+                if self.config["file_handling"] == "overwrite":
+                    import shutil
+                    if Path(output_path).exists():
+                        try:
+                            logger.info(f"[覆写] 替换原文件: {Path(video_path).name}")
+                            shutil.move(output_path, str(video_path))
+                            output_path = str(video_path)
+                            logger.info("[覆写] 替换完成")
+                        except Exception as move_err:
+                            logger.error(f"[覆写] 替换失败: {move_err}")
+                            return {"success": False, "error": f"覆写替换失败: {move_err}"}
+                    else:
+                        return {"success": False, "error": f"临时文件不存在: {output_path}"}
+                
                 # 验证输出文件
                 if Path(output_path).exists():
                     file_size = Path(output_path).stat().st_size
@@ -132,7 +147,6 @@ class SubtitleMuxer:
         
         # 根据配置确定输出格式
         if self.config["output_format"] == "auto":
-            # 保持原格式
             output_format = video_path.suffix
         elif self.config["output_format"] == "mkv":
             output_format = ".mkv"
@@ -141,14 +155,14 @@ class SubtitleMuxer:
         else:
             output_format = video_path.suffix
         
-        # 根据配置确定文件处理方式
+        stem = video_path.stem
+        parent = video_path.parent
+        
         if self.config["file_handling"] == "overwrite":
-            # 覆盖原文件
-            return str(video_path)
+            # overwrite: 临时文件，mux_subtitle 成功后会替换原文件
+            return str(parent / f"{stem}_muxed_tmp{output_format}")
         else:
-            # 创建新文件
-            stem = video_path.stem
-            parent = video_path.parent
+            # new: 保留 _muxed 后缀新文件
             return str(parent / f"{stem}_muxed{output_format}")
     
     def _detect_language(self, srt_path: str) -> Optional[str]:
@@ -288,7 +302,7 @@ class SubtitleMuxer:
                 return {"success": True}
             else:
                 error_msg = result.stderr
-                logger.error(f"FFmpeg执行失败: {error_msg}")
+                logger.error(f"FFmpeg执行失败 (返回码:{result.returncode}): {error_msg[:500]}")
                 return {"success": False, "error": error_msg}
                 
         except subprocess.TimeoutExpired:

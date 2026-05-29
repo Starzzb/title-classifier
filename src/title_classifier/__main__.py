@@ -376,6 +376,101 @@ def cmd_gui(args):
         print("请确保已安装 tkinter")
 
 
+def cmd_db(args):
+    """数据库管理命令"""
+    from pathlib import Path
+
+    db_path = str(Path("data/media.db"))
+    from .core.db_store import MediaDB
+    db = MediaDB(db_path)
+
+    action = getattr(args, "db_action", None)
+
+    if action == "init":
+        db.init_schema()
+        print(f"[完成] 数据库初始化: {db_path}")
+        print(f"[目录] {Path('data/covers').mkdir(exist_ok=True) or 'data/covers'}")
+
+    elif action == "import":
+        db.init_schema()
+        if args.csv:
+            stats = db.import_csv(args.csv)
+            print(f"[导入] {args.csv}")
+        else:
+            stats = db.import_all_csvs()
+            print("[导入] 所有 CSV 文件")
+        print(f"  新增: {stats['imported']}, 更新: {stats['updated']}, 标签: {stats['tags_added']}")
+
+    elif action == "list":
+        rows = db.list_all(limit=args.limit, offset=args.offset)
+        total = db.count()
+        print(f"[记录] 共 {total} 条，显示 {len(rows)} 条\n")
+        for r in rows:
+            tags = db.get_tags(r["id"])
+            tags_str = ", ".join(tags[:3]) if tags else ""
+            print(f"  [{r['id']}] {r['final_name'] or r['original_title'][:40]}")
+            print(f"       路径: {r['original_path'][:60]}...")
+            if tags_str:
+                print(f"       标签: {tags_str}")
+            print()
+
+    elif action == "search":
+        rows = db.search(query=args.query, tags=[args.tag] if args.tag else None, source=args.source)
+        print(f"[搜索] 找到 {len(rows)} 条记录\n")
+        for r in rows[:20]:
+            print(f"  [{r['id']}] {r['final_name'] or r['original_title'][:40]}")
+            print(f"       {r['original_path'][:70]}")
+            print()
+
+    elif action == "show":
+        r = db.get_media(args.media_id)
+        if not r:
+            print(f"[错误] 记录不存在: {args.media_id}")
+            return
+        print(f"[记录 {r['id']}]")
+        print(f"  原始标题: {r['original_title']}")
+        print(f"  当前路径: {r['current_path']}")
+        print(f"  最终名称: {r['final_name']}")
+        print(f"  描述: {r['vision_description'] or '(无)'}")
+        tags = db.get_tags(r['id'])
+        print(f"  标签: {', '.join(tags) if tags else '(无)'}")
+        print(f"  人体检测: {'是' if r['human_detected'] else '否'}")
+        print(f"  音频识别: {'是' if r['audio_recognized'] else '否'}")
+        print(f"  审核状态: {r['review_status']}")
+        print(f"  创建时间: {r['created_at']}")
+        print(f"  更新时间: {r['updated_at']}")
+        frames = db.get_vlm_frames(r['id'])
+        if frames:
+            print(f"  VLM帧: {len(frames)} 张")
+
+    elif action == "history":
+        changes = db.get_changes(args.media_id)
+        if not changes:
+            print(f"[记录 {args.media_id}] 无改动历史")
+            return
+        print(f"[记录 {args.media_id}] 改动历史 ({len(changes)} 条)\n")
+        for c in changes:
+            print(f"  {c['changed_at']} [{c['change_source']}]")
+            print(f"    {c['field_name']}: {c['old_value'][:30]} → {c['new_value'][:30]}")
+            print()
+
+    elif action == "stats":
+        stats = db.get_stats()
+        print(f"[统计]")
+        print(f"  媒体文件: {stats['total_media']}")
+        print(f"  视频: {stats['videos']}")
+        print(f"  图片: {stats['images']}")
+        print(f"  标签: {stats['total_tags']}")
+        print(f"  改动记录: {stats['total_changes']}")
+        print(f"  VLM帧: {stats['total_frames']}")
+        if stats['top_tags']:
+            print(f"\n  热门标签:")
+            for t in stats['top_tags'][:5]:
+                print(f"    {t['name']}: {t['count']} 次")
+
+    db.close()
+
+
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(
@@ -437,6 +532,33 @@ def main():
     # gui 命令
     gui_cmd = subparsers.add_parser("gui", help="启动图形界面")
     gui_cmd.set_defaults(func=cmd_gui)
+
+    # db 命令
+    db_cmd = subparsers.add_parser("db", help="数据库管理")
+    db_sub = db_cmd.add_subparsers(dest="db_action", help="数据库操作")
+    db_init = db_sub.add_parser("init", help="初始化数据库")
+    db_init.set_defaults(func=cmd_db)
+    db_import = db_sub.add_parser("import", help="从CSV导入数据")
+    db_import.add_argument("--csv", help="指定CSV文件路径")
+    db_import.add_argument("--all", action="store_true", help="导入所有CSV（默认）")
+    db_import.set_defaults(func=cmd_db)
+    db_list = db_sub.add_parser("list", help="列出记录")
+    db_list.add_argument("--limit", type=int, default=20, help="显示数量")
+    db_list.add_argument("--offset", type=int, default=0, help="偏移量")
+    db_list.set_defaults(func=cmd_db)
+    db_search = db_sub.add_parser("search", help="搜索记录")
+    db_search.add_argument("--query", help="搜索关键词")
+    db_search.add_argument("--tag", help="按标签搜索")
+    db_search.add_argument("--source", help="按来源筛选")
+    db_search.set_defaults(func=cmd_db)
+    db_show = db_sub.add_parser("show", help="查看单条记录")
+    db_show.add_argument("media_id", type=int, help="记录ID")
+    db_show.set_defaults(func=cmd_db)
+    db_history = db_sub.add_parser("history", help="查看改动历史")
+    db_history.add_argument("media_id", type=int, help="记录ID")
+    db_history.set_defaults(func=cmd_db)
+    db_stats = db_sub.add_parser("stats", help="统计信息")
+    db_stats.set_defaults(func=cmd_db)
 
     args = parser.parse_args()
 

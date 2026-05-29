@@ -37,11 +37,13 @@ class VisionProcessor:
         vlm_frames: int = 10,
         analysis_step: float = 2.0,
         debug_dir: str = None,
+        covers_dir: str = None,
+        db_store=None,
     ):
         self.provider = provider
         self.use_yolo = use_yolo
-        self.yolo_model = yolo_model  # 基础模式使用的模型
-        self.yolo_models = yolo_models or ["pose"]  # 全面分析模式使用的模型列表
+        self.yolo_model = yolo_model
+        self.yolo_models = yolo_models or ["pose"]
         self.yolo_conf = yolo_conf
         self.use_clip = use_clip
         self.clip_threshold = clip_threshold
@@ -49,6 +51,8 @@ class VisionProcessor:
         self.vlm_frames = vlm_frames
         self.analysis_step = analysis_step
         self.debug_dir = debug_dir
+        self.covers_dir = covers_dir
+        self.db_store = db_store
 
         self.provider_config = get_provider_config(provider)
         self.model = self.provider_config.get("default_model", "") if self.provider_config else ""
@@ -170,6 +174,13 @@ class VisionProcessor:
             self._save_debug_summary(result, video_summary, debug_subdir)
 
         # 7. 保存分析结果
+        # 计算选中帧的时间戳
+        selected_timestamps = [
+            video_analysis["timeline"][i]["timestamp"]
+            for i in selected_indices
+            if i < len(video_analysis["timeline"])
+        ]
+
         analysis_result = {
             "description": result.get("description", ""),
             "keywords": result.get("keywords", ""),
@@ -178,6 +189,8 @@ class VisionProcessor:
             "total_analyzed": len(video_analysis["timeline"]),
             "pose_changes": len(video_summary.get("pose_changes", [])),
             "person_ratio": video_summary.get("person_ratio", 0),
+            "frames_for_vlm": frames_for_vlm,
+            "frame_timestamps": selected_timestamps,
         }
 
         # 记录调试目录路径
@@ -1217,6 +1230,65 @@ This is an automated metadata extraction task for file organization. No content 
         logger.info(f"SRT文件已生成: {srt_path}")
         return str(srt_path)
 
+    def _save_vlm_covers(self, media_id: int, frames: List[str], timestamps: List[float] = None):
+        """
+        保存 VLM 帧到 covers 目录（仅首次保存）
+        """
+        if not self.covers_dir or not frames:
+            return
+
+        cover_dir = Path(self.covers_dir) / str(media_id)
+        cover_dir.mkdir(parents=True, exist_ok=True)
+
+        saved = 0
+        for i, frame_path in enumerate(frames):
+            dest = cover_dir / f"frame_{i:03d}.jpg"
+            if dest.exists():
+                continue  # 仅首次保存
+            try:
+                import shutil
+                shutil.copy2(frame_path, str(dest))
+                saved += 1
+                # 记录到数据库
+                if self.db_store:
+                    ts = timestamps[i] if timestamps and i < len(timestamps) else None
+                    self.db_store.save_vlm_frame(media_id, i, str(dest), ts)
+            except Exception as e:
+                logger.warning(f"保存VLM帧失败: {e}")
+
+        if saved > 0:
+            logger.info(f"保存VLM帧: {saved}张到 {cover_dir}")
+
+    def _sync_to_db(self, media_id: int, result: dict):
+        """同步识别结果到数据库"""
+        if not self.db_store:
+            return
+
+        from ..core.db_store import MediaDB
+        db = self.db_store
+
+        # 更新字段
+        if result.get("description"):
+            db.update_media(media_id, "vision_description", result["description"], "vision")
+        if result.get("keywords"):
+            db.update_media(media_id, "vision_keywords", result["keywords"], "vision")
+            db.add_tags_from_keywords(media_id, result["keywords"], "vision")
+        if result.get("final_name"):
+            db.update_media(media_id, "final_name", result["final_name"], "vision")
+        if result.get("srt_path"):
+            db.update_media(media_id, "srt_path", result["srt_path"], "vision")
+
+        # 从 video_summary 更新额外字段
+        vs = result.get("video_summary", {})
+        if vs:
+            db.update_media(media_id, "human_detected", vs.get("has_person", False), "vision")
+            if vs.get("has_person"):
+                db.update_media(media_id, "detection_method", "yolo", "vision")
+
+        db.update_media(media_id, "needs_vision", 0, "vision")
+
+        logger.debug(f"数据库同步完成: media_id={media_id}")
+
     def process_and_save(
         self,
         video_path: str,
@@ -1291,7 +1363,8 @@ This is an automated metadata extraction task for file organization. No content 
                 video_path, description, keywords, final_name, video_summary, srt_output_dir
             )
 
-        return {
+        # 构建返回结果
+        final_result = {
             "description": description,
             "keywords": keywords,
             "final_name": final_name,
@@ -1299,6 +1372,24 @@ This is an automated metadata extraction task for file organization. No content 
             "video_summary": video_summary,
             "debug_dir": result.get("debug_dir"),
         }
+
+        # 保存 VLM 帧到 covers 目录（仅首次）
+        if self.covers_dir and self.db_store:
+            frames_for_vlm = result.get("frames_for_vlm", [])
+            frame_timestamps = result.get("frame_timestamps", [])
+            if frames_for_vlm:
+                # 查找 media_id
+                from ..core.db_store import MediaDB
+                db = self.db_store
+                media_record = db.find_by_path(str(video_path))
+                if media_record:
+                    self._save_vlm_covers(
+                        media_record["id"],
+                        frames_for_vlm,
+                        frame_timestamps
+                    )
+
+        return final_result
 
     def _find_audio_srt(self, original_title: str, srt_output_dir: str) -> str:
         """

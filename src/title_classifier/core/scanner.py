@@ -103,9 +103,10 @@ def is_needs_vision(original: str) -> bool:
 class Scanner:
     """文件扫描器 - 简化版"""
 
-    def __init__(self, output_dir: str = "data/output"):
+    def __init__(self, output_dir: str = "data/output", db_store=None):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.db_store = db_store
 
     def scan(
         self,
@@ -167,10 +168,52 @@ class Scanner:
         if rows:
             self._save_csv(rows, output_file, append)
             logger.info(f"新增 {len(rows)} 条记录")
+
+            # 同步到数据库
+            if self.db_store:
+                for row in rows:
+                    self._sync_row_to_db(row)
+
         else:
             logger.info("没有新文件需要处理")
 
         return output_file
+
+    def _sync_row_to_db(self, row: dict):
+        """同步单行到数据库"""
+        db = self.db_store
+        original_path = row.get("original_path", "")
+        if not original_path:
+            return
+
+        # 检查是否已存在
+        existing = db.find_by_path(original_path)
+        if existing:
+            return
+
+        # 插入新记录
+        data = {
+            "original_title": row.get("original_title", ""),
+            "original_path": original_path,
+            "current_path": original_path,
+            "needs_vision": row.get("needs_vision", "").lower() == "true",
+            "final_name": row.get("final_name", ""),
+            "review_status": row.get("review_status", "待确认"),
+            "audio_recognized": row.get("audio_recognized", "").lower() == "true",
+            "srt_path": row.get("srt_path", ""),
+            "vision_description": row.get("vision_description", ""),
+            "vision_keywords": row.get("vision_keywords", ""),
+            "human_detected": row.get("human_detected", "").lower() == "true",
+            "detection_method": row.get("detection_method", ""),
+        }
+        db.insert_media(data)
+
+        # 导入标签
+        keywords = row.get("vision_keywords", "")
+        if keywords:
+            media = db.find_by_path(original_path)
+            if media:
+                db.add_tags_from_keywords(media["id"], keywords, "scanner")
 
     def _scan_directory(self, directory: Path, exclude_dirs: List[str]) -> List[Path]:
         """递归扫描目录"""
