@@ -122,8 +122,9 @@ def step_audio(csv_path: str, log_path: Path):
         return 0
 
     cmd = [
-        sys.executable, "-m", "title_classifier", "audio",
-        "--all", "-p", "mimo", "-c", csv_path, "--log", str(log_path),
+        sys.executable, "-m", "title_classifier", "--log", str(log_path),
+        "audio",
+        "--all", "-p", "mimo", "-c", csv_path,
     ]
     return run_cmd(cmd, "音频识别 (mimo)", log_path)
 
@@ -138,9 +139,10 @@ def step_vision(csv_path: str, log_path: Path):
         return 0
 
     cmd = [
-        sys.executable, "-m", "title_classifier", "vision",
+        sys.executable, "-m", "title_classifier", "--log", str(log_path),
+        "vision",
         "--all", "-p", "gcli", "--use-yolo", "--comprehensive",
-        "-c", csv_path, "--log", str(log_path),
+        "-c", csv_path,
     ]
     return run_cmd(cmd, "视觉识别 (gcli + YOLO全面分析)", log_path)
 
