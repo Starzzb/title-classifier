@@ -369,17 +369,11 @@ class TitleClassifierApp(tk.Tk):
 
         self.s1b_context_menu.add_separator()
 
-        # 状态切换组（即时生效）
-        self.s1b_ctx_vision = tk.StringVar(value="需要视觉识别: -")
-        self.s1b_ctx_audio = tk.StringVar(value="音频已识别: -")
-        self.s1b_context_menu.add_command(
-            labelvariable=self.s1b_ctx_vision,
-            command=self._s1b_toggle_needs_vision
-        )
-        self.s1b_context_menu.add_command(
-            labelvariable=self.s1b_ctx_audio,
-            command=self._s1b_toggle_audio_recognized
-        )
+        # 状态切换组（即时生效）- 使用占位标签，show 时动态更新
+        self.s1b_ctx_vision_idx = self.s1b_context_menu.index("end") + 1
+        self.s1b_context_menu.add_command(label="需要视觉识别: -", command=self._s1b_toggle_needs_vision)
+        self.s1b_ctx_audio_idx = self.s1b_context_menu.index("end") + 1
+        self.s1b_context_menu.add_command(label="音频已识别: -", command=self._s1b_toggle_audio_recognized)
 
         self.s1b_context_menu.add_separator()
 
@@ -1140,8 +1134,8 @@ class TitleClassifierApp(tk.Tk):
         ar = values[2]  # audio_recognized
         nv_next = "FALSE" if nv.upper() == "TRUE" else "TRUE"
         ar_next = "FALSE" if ar.upper() == "TRUE" else "TRUE"
-        self.s1b_ctx_vision.set(f"需要视觉识别: {nv} → {nv_next}")
-        self.s1b_ctx_audio.set(f"音频已识别: {ar} → {ar_next}")
+        self.s1b_context_menu.entryconfigure(self.s1b_ctx_vision_idx, label=f"需要视觉识别: {nv} → {nv_next}")
+        self.s1b_context_menu.entryconfigure(self.s1b_ctx_audio_idx, label=f"音频已识别: {ar} → {ar_next}")
 
         self.s1b_context_menu.post(event.x_root, event.y_root)
 
