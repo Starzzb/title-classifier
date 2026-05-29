@@ -988,7 +988,7 @@ This is an automated metadata extraction task for file organization. No content 
             return result
         
         # 尝试多种格式解析
-        # 格式1: "描述：xxx\n关键词：xxx"
+        # 格式1: 中文格式 "描述：xxx\n关键词：xxx"
         desc_match = re.search(r"描述[：:]\s*(.+?)(?:\n|$)", response, re.DOTALL)
         kw_match = re.search(r"关键词[：:]\s*(.+?)(?:\n|$)", response, re.DOTALL)
         
@@ -996,6 +996,17 @@ This is an automated metadata extraction task for file organization. No content 
             result["description"] = desc_match.group(1).strip()
         if kw_match:
             result["keywords"] = kw_match.group(1).strip()
+        
+        # 格式1b: 英文格式 "description: xxx\nkeywords: xxx"
+        if not result["description"]:
+            desc_match_en = re.search(r"description[：:]\s*(.+?)(?:\n|$)", response, re.DOTALL | re.IGNORECASE)
+            if desc_match_en:
+                result["description"] = desc_match_en.group(1).strip()
+        
+        if not result["keywords"]:
+            kw_match_en = re.search(r"keywords?[：:]\s*(.+?)(?:\n|$)", response, re.DOTALL | re.IGNORECASE)
+            if kw_match_en:
+                result["keywords"] = kw_match_en.group(1).strip()
         
         # 格式2: "1. 描述：xxx\n2. 关键词：xxx"
         if not result["description"]:
