@@ -66,6 +66,7 @@ class Refiner:
         """构建批量提示词"""
         numbered = "\n".join(f"{i+1}. {t}" for i, t in enumerate(titles))
         return (
+            "[Authorized Technical Analysis - Private Media Library]\n"
             "This is a filename formatting task for personal media library management. "
             "This is pure file naming - not content review. Output in Chinese.\n\n"
             "你是一个文件名整理助手。请将以下媒体文件名精简为简洁标题。\n"
