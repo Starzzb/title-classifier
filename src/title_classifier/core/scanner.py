@@ -133,8 +133,15 @@ class Scanner:
             logger.error(f"路径不存在: {target_path}")
             return ""
 
+        # 自动生成输出路径：目录扫描时创建子目录，单文件保持默认
         if output_file is None:
-            output_file = str(self.output_dir / "title_review.csv")
+            if target_path.is_dir():
+                dir_name = target_path.name
+                output_dir = self.output_dir / dir_name
+                output_dir.mkdir(parents=True, exist_ok=True)
+                output_file = str(output_dir / "title_review.csv")
+            else:
+                output_file = str(self.output_dir / "title_review.csv")
 
         # 判断是单个文件还是目录
         if target_path.is_file():

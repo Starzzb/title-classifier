@@ -93,7 +93,8 @@ class VisionProcessor:
 
     def _process_video_comprehensive(self, video_path: str, title: str, duration: float, audio_context: str = "", subtitle_segments: List[Dict] = None) -> Dict:
         """视频全面分析"""
-        logger.info(f"启动YOLO全面分析模式，采样间隔: {self.analysis_step}秒")
+        mode_name = "全面分析" if len(self.yolo_models) > 1 else "基础"
+        logger.info(f"启动YOLO{mode_name}模式，采样间隔: {self.analysis_step}秒，模型: {self.yolo_models}")
 
         # 创建调试目录
         debug_subdir = None
@@ -222,7 +223,7 @@ class VisionProcessor:
         if len(timestamps) > 50:  # 限制最大采样数
             timestamps = np.linspace(0, duration, 50)
 
-        logger.info(f"全面分析: {len(timestamps)}个采样点, 模型: {self.yolo_models}")
+        logger.info(f"YOLO分析: {len(timestamps)}个采样点, 模型: {self.yolo_models}")
 
         for i, ts in enumerate(timestamps):
             # 提取帧

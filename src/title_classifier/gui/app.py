@@ -812,6 +812,10 @@ class TitleClassifierApp(tk.Tk):
         dir_path = filedialog.askdirectory(title="选择扫描目录")
         if dir_path:
             self.s1_dir_var.set(dir_path)
+            # 自动建议 per-directory 的 CSV 输出路径
+            dir_name = Path(dir_path).resolve().name
+            suggested = Path(PROJECT_DIR) / "data" / "output" / dir_name / "title_review.csv"
+            self.s1_output_var.set(str(suggested))
 
     def _browse_file(self):
         """浏览文件"""
