@@ -1832,8 +1832,14 @@ class TitleClassifierApp(tk.Tk):
         if device and device != "auto":
             cmd.extend(["--device", device])
 
-        # 并发数
-        cmd.extend(["--concurrent", "3"])
+        # 并发数：根据设备自动调整
+        if device == "cuda":
+            cmd.extend(["--concurrent", "1"])  # GPU串行，避免CUDA死锁
+        elif device == "cpu":
+            import os
+            cpu_workers = min(os.cpu_count() - 1, 4)
+            cmd.extend(["--concurrent", str(cpu_workers)])  # CPU多核并行
+        # auto模式不传concurrent，让CLI自动决定
 
         # 全面分析模式
         if self.s1c_comprehensive_var.get():
