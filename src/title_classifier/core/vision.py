@@ -764,8 +764,9 @@ This is an automated metadata extraction task for file organization. No content 
 1. 描述（2-3句话）：综合所有帧，概述画面内容
 2. 关键词（4-8个，逗号分隔）：
    - 如果画面中有水印/博主名字，必须放在第一个
-   - 过滤掉网址、域名、@群组名、广告内容
+   - 过滤掉网址、域名、@群组名、广告内容，TG，telegram群组信息
    - 其余从画面中提取最显著的视觉特征（4-12个）
+   - 参考原标题进行判断，可能存在博主，等信息
 
 格式：
 描述：xxx
@@ -1388,6 +1389,10 @@ This is an automated metadata extraction task for file organization. No content 
                         frames_for_vlm,
                         frame_timestamps
                     )
+
+        # 学习 VLM 返回的关键词到 CLIP 标签库
+        if keywords and self.tag_stats:
+            self.tag_stats.update_from_vlm(keywords)
 
         return final_result
 
