@@ -798,29 +798,46 @@ uv pip install --force-reinstall torch torchvision --index-url https://download.
 
 > **提示**：加 `--force-reinstall` 是为了强制替换已安装的 CPU 版。如网络慢可尝试挂代理或使用国内镜像。
 
+> **重要**：`uv run` 会自动同步 lockfile，将 CUDA 版覆盖回 CPU 版。安装 CUDA 版后，运行命令时需加 `--no-sync`：
+> ```bash
+> uv run --no-sync title-classifier vision --use-yolo -p gcli
+> uv run --no-sync title-classifier gui
+> ```
+> 或直接使用 `.venv\Scripts\python`：
+> ```bash
+> .venv\Scripts\python -m title_classifier vision --use-yolo -p gcli
+> ```
+
 #### 3. 验证安装
 
 ```bash
-uv run python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}'); print(f'GPU: {torch.cuda.get_device_name(0)}' if torch.cuda.is_available() else 'No GPU')"
+uv run --no-sync python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}'); print(f'GPU: {torch.cuda.get_device_name(0)}' if torch.cuda.is_available() else 'No GPU')"
 ```
 
 返回 `CUDA: True` 即表示安装成功。
 
 ### 使用方式
 
+> **注意**：安装 CUDA 版后，所有 `uv run` 命令需加 `--no-sync` 防止覆盖。
+
 **CLI：**
 ```bash
 # 自动检测（推荐）
-title-classifier vision --use-yolo -p gcli
+uv run --no-sync title-classifier vision --use-yolo -p gcli
 
 # 强制使用GPU
-title-classifier vision --use-yolo --device cuda -p gcli
+uv run --no-sync title-classifier vision --use-yolo --device cuda -p gcli
 
 # 强制使用CPU
-title-classifier vision --use-yolo --device cpu -p gcli
+uv run --no-sync title-classifier vision --use-yolo --device cpu -p gcli
 ```
 
-**GUI：** 视觉识别标签页的"推理设备"下拉框选择 auto/cuda/cpu。
+**GUI：**
+```bash
+uv run --no-sync title-classifier gui
+```
+
+视觉识别标签页的"推理设备"下拉框选择 auto/cuda/cpu。
 
 **配置文件** `config/default.toml`：
 ```toml
