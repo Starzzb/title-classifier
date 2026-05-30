@@ -6,6 +6,7 @@ import os
 import re
 import logging
 import tempfile
+import threading
 from pathlib import Path
 from typing import Union, List, Dict, Optional, Tuple
 
@@ -19,6 +20,9 @@ from ..utils.image import compress_image, image_to_base64
 from ..utils.stats import TagStatistics
 
 logger = logging.getLogger(__name__)
+
+# GPU锁：CUDA不支持多线程并发推理，需要串行化
+_gpu_lock = threading.Lock()
 
 
 class VisionProcessor:
@@ -300,7 +304,12 @@ class VisionProcessor:
 
             if frame is not None and self.yolo_detector:
                 logger.debug(f"[DEBUG] 帧{i}: 开始analyze_comprehensive")
-                comprehensive_result = self.yolo_detector.analyze_comprehensive(frame)
+                # CUDA推理需要串行化（GPU不支持多线程并发推理）
+                if self.device == "cuda":
+                    with _gpu_lock:
+                        comprehensive_result = self.yolo_detector.analyze_comprehensive(frame)
+                else:
+                    comprehensive_result = self.yolo_detector.analyze_comprehensive(frame)
                 logger.debug(f"[DEBUG] 帧{i}: analyze_comprehensive完成")
 
                 timeline_entry = {
@@ -930,7 +939,11 @@ This is an automated metadata extraction task for file organization. No content 
             data = np.fromfile(frame_path, dtype=np.uint8)
             frame = cv2.imdecode(data, cv2.IMREAD_COLOR)
             if frame is not None:
-                pose_result = self.yolo_detector.estimate_pose(frame)
+                if self.device == "cuda":
+                    with _gpu_lock:
+                        pose_result = self.yolo_detector.estimate_pose(frame)
+                else:
+                    pose_result = self.yolo_detector.estimate_pose(frame)
                 results.append(pose_result)
             else:
                 results.append({"has_person": False})
