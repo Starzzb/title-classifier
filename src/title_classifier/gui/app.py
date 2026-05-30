@@ -644,8 +644,25 @@ class TitleClassifierApp(tk.Tk):
         tab = ttk.Frame(self.notebook)
         self.notebook.add(tab, text="Stage1c 视觉识别")
 
+        # 可滚动容器
+        canvas = tk.Canvas(tab, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(tab, orient=tk.VERTICAL, command=canvas.yview)
+        scroll_frame = ttk.Frame(canvas)
+
+        scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # 鼠标滚轮绑定
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
         # CSV文件
-        csv_frame = ttk.LabelFrame(tab, text="CSV文件")
+        csv_frame = ttk.LabelFrame(scroll_frame, text="CSV文件")
         csv_frame.pack(fill=tk.X, padx=4, pady=4)
 
         self.s1c_csv_var = tk.StringVar(value=DEFAULT_CSV)
@@ -655,7 +672,7 @@ class TitleClassifierApp(tk.Tk):
         ToolTip(csv_entry, "Stage1生成的CSV文件，视觉识别会分析视频内容并生成描述和关键词")
 
         # Provider选择
-        provider_frame = ttk.LabelFrame(tab, text="AI Provider")
+        provider_frame = ttk.LabelFrame(scroll_frame, text="AI Provider")
         provider_frame.pack(fill=tk.X, padx=4, pady=4)
 
         self.s1c_provider_var = tk.StringVar(value="gcli")
@@ -665,7 +682,7 @@ class TitleClassifierApp(tk.Tk):
         ToolTip(provider_combo, "选择视觉AI服务提供商\n- gcli: Google Gemini（推荐）\n- mimo: 小米MiMo\n- zhipu: 智谱GLM")
 
         # 推理设备选择
-        device_frame = ttk.LabelFrame(tab, text="推理设备")
+        device_frame = ttk.LabelFrame(scroll_frame, text="推理设备")
         device_frame.pack(fill=tk.X, padx=4, pady=4)
 
         self.s1c_device_var = tk.StringVar(value="auto")
@@ -678,7 +695,7 @@ class TitleClassifierApp(tk.Tk):
         self._update_device_status()
 
         # 检测器选择
-        det_frame = ttk.LabelFrame(tab, text="检测器")
+        det_frame = ttk.LabelFrame(scroll_frame, text="检测器")
         det_frame.pack(fill=tk.X, padx=4, pady=4)
 
         # YOLO检测器说明
@@ -715,7 +732,7 @@ class TitleClassifierApp(tk.Tk):
                 "适用场景：大量图片需要快速分类时使用")
 
         # 分析参数
-        param_frame = ttk.LabelFrame(tab, text="分析参数")
+        param_frame = ttk.LabelFrame(scroll_frame, text="分析参数")
         param_frame.pack(fill=tk.X, padx=4, pady=4)
 
         ttk.Label(param_frame, text="采样间隔(秒):").pack(side=tk.LEFT, padx=4)
@@ -736,7 +753,7 @@ class TitleClassifierApp(tk.Tk):
                 "此参数由采样间隔决定，通常不需要手动设置")
 
         # 选项
-        opt_frame = ttk.LabelFrame(tab, text="选项")
+        opt_frame = ttk.LabelFrame(scroll_frame, text="选项")
         opt_frame.pack(fill=tk.X, padx=4, pady=4)
 
         self.s1c_all_var = tk.BooleanVar()
@@ -756,7 +773,7 @@ class TitleClassifierApp(tk.Tk):
                 "- 处理完成后自动打开调试窗口")
 
         # 废弃提醒
-        deprecation_frame = ttk.Frame(tab)
+        deprecation_frame = ttk.Frame(scroll_frame)
         deprecation_frame.pack(fill=tk.X, padx=4, pady=4)
         deprecation_label = ttk.Label(
             deprecation_frame,
@@ -770,7 +787,7 @@ class TitleClassifierApp(tk.Tk):
                 "请使用 'Stage1c 音频识别' 标签页进行音频识别")
 
         # 字幕封装选项
-        mux_frame = ttk.LabelFrame(tab, text="字幕封装")
+        mux_frame = ttk.LabelFrame(scroll_frame, text="字幕封装")
         mux_frame.pack(fill=tk.X, padx=4, pady=4)
 
         # 提示信息
@@ -854,7 +871,7 @@ class TitleClassifierApp(tk.Tk):
         mux_status.pack(fill=tk.X, padx=4, pady=2)
 
         # 执行按钮
-        btn_frame = ttk.Frame(tab)
+        btn_frame = ttk.Frame(scroll_frame)
         btn_frame.pack(fill=tk.X, padx=4, pady=8)
 
         vision_btn = ttk.Button(btn_frame, text="视觉识别", command=self._run_vision)
