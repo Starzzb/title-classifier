@@ -791,6 +791,7 @@ title-classifier/
 │       │   ├── image.py             # 图片工具
 │       │   ├── audio.py             # 音频处理（VAD分段 + API调用）
 │       │   ├── atomic_csv.py        # 原子化CSV读写（崩溃安全）
+│       │   ├── file_resolve.py      # 文件路径解析（Stage2重命名后回退查找）
 │       │   ├── muxer.py             # 字幕封装（SRT嵌入视频）
 │       │   ├── subtitle_postprocessor.py  # 字幕后处理
 │       │   └── stats.py             # 标签统计
@@ -810,17 +811,27 @@ title-classifier/
 │   └── yolo/                        # YOLO模型（自动下载）
 │
 ├── scripts/
-│   ├── download_models.py           # 一键下载所有模型
-│   ├── download_clip.py
-│   ├── download_yolo_models.py
-│   ├── full_workflow.py             # 完整工作流
-│   ├── workflow_common.py           # 工作流公共模块
-│   ├── workflow_scan_audio.py       # 扫描+音频识别
-│   ├── workflow_vision.py           # 扫描+视觉识别
-│   ├── workflow_reclassify.py       # 强制重分类
-│   ├── workflow_rename.py           # 确认+重命名
-│   ├── workflow_mux.py              # 字幕封装
-│   └── import_csv.py                # CSV导入到数据库
+│   ├── README.md                  # 脚本说明文档
+│   ├── output/                    # 脚本产生的日志/报告
+│   │
+│   ├── full_workflow.py           # 完整工作流（扫描→音频→视觉→封装→确认→重命名）
+│   ├── workflow_common.py         # 工作流公共模块
+│   ├── workflow_scan_audio.py     # 扫描+音频识别
+│   ├── workflow_vision.py         # 扫描+视觉识别
+│   ├── workflow_reclassify.py     # 强制重分类
+│   ├── workflow_rename.py         # 确认+重命名
+│   ├── workflow_mux.py            # 字幕封装
+│   │
+│   ├── fix_bracket_only.py        # 修CSV final_name：[标题]→标题
+│   ├── fix_bracket_filenames.py   # 修磁盘文件名+CSV：[标题].mp4→标题.mp4
+│   ├── fix_csv_paths.py           # 修CSV original_path：去掉[关键词]_前缀
+│   ├── fix_all_csvs.py            # 批量对所有CSV执行fix_bracket_only
+│   │
+│   ├── download_models.py         # 一键下载所有模型
+│   ├── download_clip.py           # 下载CLIP模型
+│   ├── download_yolo_models.py    # 下载YOLO模型
+│   ├── import_csv.py              # CSV导入到数据库
+│   └── test_prompts.py            # 测试prompt效果
 │
 ├── tests/                           # 测试文件
 ├── test/                            # 测试数据
@@ -929,7 +940,40 @@ title-classifier db stats
 
 ## 更新日志
 
-### v7.5.0（当前版本）
+### v7.6.0（当前版本）
+
+**修复：Stage2重命名后文件查找**
+
+- 新增 `resolve_media_path()` 三级回退查找，处理Stage2重命名后CSV中original_path指向旧文件名的问题
+  - 第1级：original_path直接存在
+  - 第2级：用final_name在同目录拼路径
+  - 第3级：去掉`[关键词]_`前缀后按original_title stem搜索
+- vision/audio/renamer/muxer 四个模块统一使用回退查找
+
+**修复：Stage1b final_name格式统一**
+
+- Stage1b确认写入格式从`[优化标题]`改为`[优化标题]_原始标题`，与Vision输出一致
+- 原标题不变时不加格式（填入原标题操作保持原样）
+
+**GUI Stage1b 批量操作**
+
+- 新增批量按钮：选中行→需要视觉/不需要视觉/反选
+- 新增全选/取消全选按钮
+- AI优化进度条（实时显示百分比）
+
+**Refiner 并发加速**
+
+- Refiner改为并发批处理（ThreadPoolExecutor, 3线程并发）
+- batch_size从5提升到10，速度约提升3倍
+
+**数据修复脚本**
+
+- 新增 `scripts/fix_bracket_only.py`：修CSV中纯中括号的final_name
+- 新增 `scripts/fix_bracket_filenames.py`：修磁盘文件名+同步更新CSV
+- 新增 `scripts/fix_csv_paths.py`：修CSV的original_path去掉`[关键词]_`前缀
+- 新增 `scripts/fix_all_csvs.py`：批量对所有CSV执行修复
+
+### v7.5.0
 
 **新增：SQLite 数据库**
 

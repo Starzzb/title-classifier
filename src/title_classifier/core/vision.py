@@ -767,6 +767,7 @@ This is an automated metadata extraction task for file organization. No content 
    - 过滤掉网址、域名、@群组名、广告内容，TG，telegram群组信息
    - 其余从画面中提取最显著的视觉特征（4-12个）
    - 参考原标题进行判断，可能存在博主，等信息
+   - 原标题存在的各种中文信息或者博主名称，行为信息判断出重要的价值信息作为关键词
 
 格式：
 描述：xxx
