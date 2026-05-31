@@ -793,12 +793,22 @@ class TitleClassifierApp(tk.Tk):
                 "- 较大值：分析更快，但可能遗漏细节\n\n"
                 "108秒视频，间隔2秒 = 约54帧（自动限制最多50帧）")
 
+        ttk.Label(param_frame, text="最大采样帧数:").pack(side=tk.LEFT, padx=8)
+        self.s1c_max_sample_var = tk.StringVar(value="50")
+        max_sample_entry = ttk.Entry(param_frame, textvariable=self.s1c_max_sample_var, width=6)
+        max_sample_entry.pack(side=tk.LEFT, padx=4)
+        ToolTip(max_sample_entry, "采样帧数上限\n\n"
+                "- 默认50帧，覆盖整个视频\n"
+                "- 增大：分析更细致，但YOLO推理时间更长\n"
+                "- 减小：分析更快，但可能遗漏细节\n\n"
+                "超过此数时，会均匀分布到整个视频")
+
         ttk.Label(param_frame, text="VLM帧数:").pack(side=tk.LEFT, padx=8)
         self.s1c_vlm_frames_var = tk.StringVar(value="10")
         frames_entry = ttk.Entry(param_frame, textvariable=self.s1c_vlm_frames_var, width=6)
         frames_entry.pack(side=tk.LEFT, padx=4)
         ToolTip(frames_entry, "传给VLM分析的帧数\n\n"
-                "此参数由采样间隔决定，通常不需要手动设置")
+                "从采样帧中智能选择，传给VLM进行内容分析")
 
         # 选项
         opt_frame = ttk.LabelFrame(scroll_frame, text="选项")
@@ -1923,6 +1933,10 @@ class TitleClassifierApp(tk.Tk):
         if analysis_step:
             cmd.extend(["--analysis-step", analysis_step])
 
+        max_sample = self.s1c_max_sample_var.get()
+        if max_sample and max_sample != "50":
+            cmd.extend(["--max-sample-frames", max_sample])
+
         vlm_frames = self.s1c_vlm_frames_var.get()
         if vlm_frames:
             cmd.extend(["--vlm-frames", vlm_frames])
@@ -1993,6 +2007,10 @@ class TitleClassifierApp(tk.Tk):
         analysis_step = self.s1c_analysis_step_var.get()
         if analysis_step:
             cmd.extend(["--analysis-step", analysis_step])
+
+        max_sample = self.s1c_max_sample_var.get()
+        if max_sample and max_sample != "50":
+            cmd.extend(["--max-sample-frames", max_sample])
 
         vlm_frames = self.s1c_vlm_frames_var.get()
         if vlm_frames:

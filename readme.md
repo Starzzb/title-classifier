@@ -439,6 +439,62 @@ uv run title-classifier vision --use-yolo --comprehensive -p gcli
 - 将选中帧的图片传给VLM
 - 同时传入三个模型的详细分析结果作为上下文（分别标注来源）
 
+### 帧数处理流程
+
+视频分析分为三个阶段，每阶段的帧数关系如下：
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      采样阶段                                │
+│  视频时长 108秒，采样间隔 2秒                                 │
+│  → np.arange(0, 108, 2) = 54个采样点                         │
+│  → 超过 max_sample_frames(50) 限制                           │
+│  → np.linspace(0, 108, 50) = 50个采样点（均匀分布）           │
+│                                                              │
+│  采样帧数 = min(视频时长/间隔, max_sample_frames)             │
+│  默认上限: 50帧                                              │
+└─────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────┐
+│                    YOLO 推理阶段                             │
+│  对每帧进行运动检测：                                         │
+│  - 静止帧 → 复用上一帧结果（跳过YOLO推理）                    │
+│  - 运动帧 → 执行 YOLO 推理                                   │
+│                                                              │
+│  YOLO 推理帧数 = 采样帧数 - 运动检测跳过数                    │
+│  示例：50帧采样，30帧静止 → YOLO 推理 20帧                    │
+└─────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────┐
+│                    VLM 帧选择阶段                            │
+│  从 timeline（包含所有帧）中智能选择代表性帧：                │
+│  - 将 timeline 等分为 vlm_frames 个区段                      │
+│  - 每区段按置信度+关键点评分选最优帧                          │
+│  - 无人体帧取区段中间帧                                       │
+│                                                              │
+│  VLM 发送帧数 = vlm_frames（默认 10帧）                      │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 帧数配置参数
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--analysis-step` | 2.0 | 采样间隔（秒），越小越细致 |
+| `--max-sample-frames` | 50 | 采样帧数上限，超过后均匀分布 |
+| `--vlm-frames` | 10 | 发送给 VLM 的帧数 |
+| `--motion-threshold` | 5.0 | 运动检测阈值（%） |
+
+### 配置示例
+
+```powershell
+# 更细致的分析（更多采样帧）
+uv run title-classifier vision --use-yolo --max-sample-frames 80 --vlm-frames 15 -p gcli
+
+# 快速分析（更少采样帧）
+uv run title-classifier vision --use-yolo --max-sample-frames 30 --vlm-frames 5 -p gcli
+```
+
 ### 送入VLM的上下文格式
 
 #### 基础模式上下文示例
@@ -1410,7 +1466,14 @@ title-classifier db stats
 - `[yolo]` 新增 `backend = "auto"`
 - `[yolo.openvino]` 新增 `precision = "FP16"` 和 `cache_dir`
 - `[vision]` 新增 `motion_detection`、`motion_threshold`、`motion_min_interval`
+- `[vision]` 新增 `max_sample_frames = 50`（采样帧数上限）
 - `[vision.decode]` 新增 `hw_accel` 和 `batch_extract`
+
+**GUI 更新**
+
+- 新增 YOLO 推理后端选择（auto/openvino/pytorch）
+- 新增 运动检测开关和阈值配置
+- 新增 最大采样帧数配置
 
 ### v7.6.0
 

@@ -112,6 +112,7 @@ def cmd_vision(args):
         max_image_size=args.max_image_size,
         vlm_frames=args.vlm_frames,
         analysis_step=args.analysis_step,
+        max_sample_frames=args.max_sample_frames,
         debug_dir=debug_dir,
         device=args.device,
         motion_detection=not args.no_motion_detection,
@@ -578,6 +579,7 @@ def main():
     vision_cmd.add_argument("--max-image-size", type=int, default=640, help="图片最大尺寸")
     vision_cmd.add_argument("--vlm-frames", type=int, default=10, help="VLM帧数（由采样间隔决定）")
     vision_cmd.add_argument("--analysis-step", type=float, default=2.0, help="YOLO模式采样间隔（秒，默认2秒）")
+    vision_cmd.add_argument("--max-sample-frames", type=int, default=50, help="最大采样帧数上限（默认50，超过此数会均匀分布到整个视频）")
     vision_cmd.add_argument("--device", default="cpu", choices=["auto", "cuda", "cpu"], help="推理设备（cpu=默认, auto=自动检测, cuda=GPU需手动安装CUDA版PyTorch）")
     vision_cmd.add_argument("--concurrent", type=int, default=4, help="并发处理视频数（默认4，CPU多核并行）")
     vision_cmd.add_argument("--backend", default="auto", choices=["auto", "openvino", "pytorch"], help="YOLO推理后端（auto=自动检测, openvino=Intel/AMD CPU加速, pytorch=原始PyTorch）")

@@ -41,6 +41,7 @@ class VisionProcessor:
         max_image_size: int = 640,
         vlm_frames: int = 10,
         analysis_step: float = 2.0,
+        max_sample_frames: int = 50,
         debug_dir: str = None,
         covers_dir: str = None,
         db_store=None,
@@ -60,6 +61,7 @@ class VisionProcessor:
         self.max_image_size = max_image_size
         self.vlm_frames = vlm_frames
         self.analysis_step = analysis_step
+        self.max_sample_frames = max_sample_frames
         self.debug_dir = debug_dir
         self.covers_dir = covers_dir
         self.db_store = db_store
@@ -327,8 +329,8 @@ class VisionProcessor:
 
         # 计算采样时间点
         timestamps = np.arange(0, duration, self.analysis_step)
-        if len(timestamps) > 50:  # 限制最大采样数
-            timestamps = np.linspace(0, duration, 50)
+        if len(timestamps) > self.max_sample_frames:  # 限制最大采样数
+            timestamps = np.linspace(0, duration, self.max_sample_frames)
 
         logger.info(f"YOLO分析: {len(timestamps)}个采样点, 模型: {self.yolo_models}")
         if self.motion_detection:
