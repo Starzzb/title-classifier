@@ -739,6 +739,46 @@ class TitleClassifierApp(tk.Tk):
                 "- 如果置信度足够高，可跳过VLM调用\n\n"
                 "适用场景：大量图片需要快速分类时使用")
 
+        # YOLO推理后端
+        backend_frame = ttk.LabelFrame(scroll_frame, text="YOLO推理后端")
+        backend_frame.pack(fill=tk.X, padx=4, pady=4)
+
+        self.s1c_backend_var = tk.StringVar(value="auto")
+        backend_combo = ttk.Combobox(backend_frame, textvariable=self.s1c_backend_var, 
+                                     values=["auto", "openvino", "pytorch"], state="readonly", width=12)
+        backend_combo.pack(side=tk.LEFT, padx=4)
+        self.s1c_backend_label = ttk.Label(backend_frame, text="", foreground="#888888")
+        self.s1c_backend_label.pack(side=tk.LEFT, padx=4)
+        ToolTip(backend_combo, "YOLO推理后端选择\n\n"
+                "- auto: 自动检测（CPU时使用OpenVINO，推荐）\n"
+                "- openvino: Intel/AMD CPU加速（FP16，速度2-3x）\n"
+                "- pytorch: 原始PyTorch（兼容性最好）\n\n"
+                "首次使用OpenVINO时会自动导出模型（约30秒）")
+        self._update_backend_status()
+
+        # 运动检测选项
+        motion_frame = ttk.LabelFrame(scroll_frame, text="运动检测")
+        motion_frame.pack(fill=tk.X, padx=4, pady=4)
+
+        self.s1c_motion_var = tk.BooleanVar(value=True)
+        motion_cb = ttk.Checkbutton(motion_frame, text="启用运动检测前置过滤", variable=self.s1c_motion_var)
+        motion_cb.pack(side=tk.LEFT, padx=4)
+        ToolTip(motion_cb, "跳过静止画面的YOLO推理\n\n"
+                "原理：\n"
+                "- 使用帧差法检测画面变化\n"
+                "- 静止帧复用上一帧结果\n"
+                "- 监控等静态场景可减少60-80%推理\n\n"
+                "建议：保持启用，对动态场景无负面影响")
+
+        ttk.Label(motion_frame, text="阈值(%):").pack(side=tk.LEFT, padx=(12, 4))
+        self.s1c_motion_threshold_var = tk.StringVar(value="5.0")
+        threshold_entry = ttk.Entry(motion_frame, textvariable=self.s1c_motion_threshold_var, width=6)
+        threshold_entry.pack(side=tk.LEFT, padx=4)
+        ToolTip(threshold_entry, "运动检测阈值（变化像素比例）\n\n"
+                "- 默认5%：变化超过5%认为有运动\n"
+                "- 降低（如2%）：更敏感，更多帧执行推理\n"
+                "- 提高（如10%）：更不敏感，更多帧被跳过")
+
         # 分析参数
         param_frame = ttk.LabelFrame(scroll_frame, text="分析参数")
         param_frame.pack(fill=tk.X, padx=4, pady=4)
@@ -1839,6 +1879,7 @@ class TitleClassifierApp(tk.Tk):
         csv = self.s1c_csv_var.get()
         provider = self.s1c_provider_var.get()
         device = self.s1c_device_var.get()
+        backend = self.s1c_backend_var.get()
 
         cmd = [PYTHON, "-m", "title_classifier", "vision", "-c", csv, "-p", provider]
 
@@ -1848,6 +1889,10 @@ class TitleClassifierApp(tk.Tk):
         # 推理设备
         if device and device != "auto":
             cmd.extend(["--device", device])
+
+        # YOLO推理后端
+        if backend and backend != "auto":
+            cmd.extend(["--backend", backend])
 
         # 并发数：根据设备自动调整
         if device == "cuda":
@@ -1864,6 +1909,14 @@ class TitleClassifierApp(tk.Tk):
 
         if self.s1c_use_clip_var.get():
             cmd.append("--use-clip")
+
+        # 运动检测
+        if not self.s1c_motion_var.get():
+            cmd.append("--no-motion-detection")
+        else:
+            threshold = self.s1c_motion_threshold_var.get()
+            if threshold and threshold != "5.0":
+                cmd.extend(["--motion-threshold", threshold])
 
         # 添加分析参数
         analysis_step = self.s1c_analysis_step_var.get()
@@ -1898,6 +1951,7 @@ class TitleClassifierApp(tk.Tk):
         csv = self.s1c_csv_var.get()
         provider = self.s1c_provider_var.get()
         device = self.s1c_device_var.get()
+        backend = self.s1c_backend_var.get()
 
         cmd = [PYTHON, "-m", "title_classifier", "vision", "-c", csv, "-p", provider]
 
@@ -1907,6 +1961,10 @@ class TitleClassifierApp(tk.Tk):
         # 推理设备
         if device and device != "auto":
             cmd.extend(["--device", device])
+
+        # YOLO推理后端
+        if backend and backend != "auto":
+            cmd.extend(["--backend", backend])
 
         # 并发数：根据设备自动调整
         if device == "cuda":
@@ -1922,6 +1980,14 @@ class TitleClassifierApp(tk.Tk):
 
         if self.s1c_use_clip_var.get():
             cmd.append("--use-clip")
+
+        # 运动检测
+        if not self.s1c_motion_var.get():
+            cmd.append("--no-motion-detection")
+        else:
+            threshold = self.s1c_motion_threshold_var.get()
+            if threshold and threshold != "5.0":
+                cmd.extend(["--motion-threshold", threshold])
 
         # 添加分析参数
         analysis_step = self.s1c_analysis_step_var.get()
@@ -1953,6 +2019,14 @@ class TitleClassifierApp(tk.Tk):
                 self.s1c_device_label.config(text="PyTorch CPU版（推荐）", foreground="#44aa44")
         except ImportError:
             self.s1c_device_label.config(text="PyTorch未安装", foreground="#cc4444")
+
+    def _update_backend_status(self):
+        """更新YOLO后端状态显示"""
+        try:
+            import openvino
+            self.s1c_backend_label.config(text="OpenVINO可用 ✓", foreground="#44aa44")
+        except ImportError:
+            self.s1c_backend_label.config(text="OpenVINO未安装（需手动安装）", foreground="#cc8800")
         except Exception:
             self.s1c_device_label.config(text="", foreground="#888888")
 
