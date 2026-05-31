@@ -1421,7 +1421,7 @@ title-classifier db stats
 
 ## 更新日志
 
-### v7.7.0（当前版本）
+### v8.0.0（当前版本）
 
 **新增：OpenVINO CPU 加速**
 
