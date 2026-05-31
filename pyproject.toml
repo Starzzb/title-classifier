@@ -31,6 +31,7 @@ dependencies = [
     "ultralytics>=8.0.0",
     "tomli-w>=1.0.0",
     "silero-vad>=5.1.0",
+    "openvino>=2024.0.0",
 ]
 
 [project.optional-dependencies]

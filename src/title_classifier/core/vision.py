@@ -45,6 +45,10 @@ class VisionProcessor:
         covers_dir: str = None,
         db_store=None,
         device: str = "cpu",
+        motion_detection: bool = True,
+        motion_threshold: float = 5.0,
+        motion_min_interval: float = 2.0,
+        backend: str = "auto",
     ):
         self.provider = provider
         self.use_yolo = use_yolo
@@ -60,6 +64,10 @@ class VisionProcessor:
         self.covers_dir = covers_dir
         self.db_store = db_store
         self.device = self._resolve_device(device)
+        self.motion_detection = motion_detection
+        self.motion_threshold = motion_threshold
+        self.motion_min_interval = motion_min_interval
+        self.backend = backend
 
         self.provider_config = get_provider_config(provider)
         self.model = self.provider_config.get("default_model", "") if self.provider_config else ""
@@ -107,10 +115,15 @@ class VisionProcessor:
             model_types=self.yolo_models,
             confidence=self.yolo_conf,
             device=self.device,
+            backend=self.backend,
         )
         if not self.yolo_detector.load_model():
             logger.error("YOLO模型加载失败")
             return False
+
+        # 记录后端信息
+        if hasattr(self.yolo_detector, '_backend_type'):
+            logger.info(f"YOLO后端: {self.yolo_detector._backend_type}")
 
         if self.use_clip:
             self.clip_classifier = CLIPClassifier(tag_stats=self.tag_stats, device=self.device)
@@ -120,6 +133,50 @@ class VisionProcessor:
                 self.clip_classifier = None
 
         return True
+
+    def _detect_motion(self, prev_frame: np.ndarray, curr_frame: np.ndarray, 
+                       threshold: float = None) -> Tuple[bool, float]:
+        """
+        轻量级运动检测 - 帧差法
+        
+        Args:
+            prev_frame: 上一帧 (BGR)
+            curr_frame: 当前帧 (BGR)
+            threshold: 变化像素比例阈值（%），低于此值认为是静止画面
+            
+        Returns:
+            (has_motion, change_ratio): 是否有运动，变化像素比例（0-100）
+        """
+        if threshold is None:
+            threshold = self.motion_threshold
+        
+        try:
+            # 1. 转灰度
+            gray_prev = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+            gray_curr = cv2.cvtColor(curr_frame, cv2.COLOR_BGR2GRAY)
+            
+            # 2. 高斯模糊降噪（减少压缩伪影影响）
+            gray_prev = cv2.GaussianBlur(gray_prev, (21, 21), 0)
+            gray_curr = cv2.GaussianBlur(gray_curr, (21, 21), 0)
+            
+            # 3. 计算绝对差值
+            frame_diff = cv2.absdiff(gray_prev, gray_curr)
+            
+            # 4. 二值化（超过阈值的像素设为255）
+            _, thresh = cv2.threshold(frame_diff, 25, 255, cv2.THRESH_BINARY)
+            
+            # 5. 计算变化像素比例
+            change_ratio = (np.count_nonzero(thresh) / thresh.size) * 100
+            
+            # 6. 判断是否有运动
+            has_motion = change_ratio > threshold
+            
+            return has_motion, change_ratio
+            
+        except Exception as e:
+            logger.warning(f"运动检测失败: {e}")
+            # 出错时默认有运动，避免误跳帧
+            return True, 100.0
 
     def process_video(self, video_path: str, title: str, audio_context: str = "", subtitle_segments: List[Dict] = None) -> Dict:
         """处理视频 - 全面分析模式"""
@@ -262,7 +319,7 @@ class VisionProcessor:
         }
 
     def _analyze_video_comprehensive(self, video_path: str, duration: float) -> Dict:
-        """全面分析视频 - 高密度采样，使用多个YOLO模型"""
+        """全面分析视频 - 高密度采样，使用多个YOLO模型，支持运动检测跳帧"""
         tmp_dir = Path("logs/_vision_tmp") / Path(video_path).stem
         tmp_dir.mkdir(parents=True, exist_ok=True)
         frames = []
@@ -274,6 +331,8 @@ class VisionProcessor:
             timestamps = np.linspace(0, duration, 50)
 
         logger.info(f"YOLO分析: {len(timestamps)}个采样点, 模型: {self.yolo_models}")
+        if self.motion_detection:
+            logger.info(f"运动检测已启用: 阈值={self.motion_threshold}%, 最小强制间隔={self.motion_min_interval}s")
 
         # CUDA预热：第一次推理会编译kernel，耗时较长
         if self.device == "cuda":
@@ -288,6 +347,12 @@ class VisionProcessor:
             except Exception as e:
                 logger.warning(f"CUDA预热失败: {e}")
 
+        # 运动检测相关变量
+        prev_frame_gray = None
+        prev_result = None
+        last_forced_timestamp = -float('inf')  # 上次强制推理的时间戳
+        motion_skipped_count = 0
+
         for i, ts in enumerate(timestamps):
             # 提取帧
             frame_path = str(tmp_dir / f"frame_{i:04d}_{ts:.1f}s.jpg")
@@ -299,11 +364,44 @@ class VisionProcessor:
 
             frames.append(frame_path)
 
-            # YOLO全面分析（使用多个模型）
+            # 读取帧用于运动检测和YOLO分析
             data = np.fromfile(frame_path, dtype=np.uint8)
             frame = cv2.imdecode(data, cv2.IMREAD_COLOR)
 
-            if frame is not None and self.yolo_detector:
+            if frame is None:
+                continue
+
+            # 运动检测：判断是否可以跳过YOLO推理
+            should_skip = False
+            if self.motion_detection and prev_frame_gray is not None:
+                # 计算距离上次强制推理的时间
+                time_since_forced = ts - last_forced_timestamp
+                
+                # 如果距离上次强制推理时间足够长，不跳过（防止长时间静止后场景跳变）
+                if time_since_forced < self.motion_min_interval:
+                    has_motion, change_ratio = self._detect_motion(
+                        prev_frame_gray, frame
+                    )
+                    if not has_motion:
+                        should_skip = True
+                        motion_skipped_count += 1
+                        logger.debug(f"帧{i}: 静止画面 (变化={change_ratio:.2f}%), 跳过YOLO推理")
+
+            if should_skip and prev_result is not None:
+                # 复用上一帧结果，更新时间戳和帧路径
+                timeline_entry = prev_result.copy()
+                timeline_entry["timestamp"] = ts
+                timeline_entry["frame_path"] = frame_path
+                timeline_entry["index"] = i
+                timeline_entry["motion_skipped"] = True
+                timeline.append(timeline_entry)
+                
+                # 更新上一帧灰度图（用于下一次运动检测）
+                prev_frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                continue
+
+            # 有运动或首次帧，执行YOLO全面分析
+            if self.yolo_detector:
                 logger.debug(f"[DEBUG] 帧{i}: 开始analyze_comprehensive")
                 # CUDA推理需要串行化（GPU不支持多线程并发推理）
                 if self.device == "cuda":
@@ -321,6 +419,7 @@ class VisionProcessor:
                     "confidence": comprehensive_result.get("confidence", 0),
                     "models_used": comprehensive_result.get("models_used", []),
                     "vote_count": comprehensive_result.get("merged", {}).get("vote_count", 0),
+                    "motion_skipped": False,
                 }
 
                 # 保存原始模型输出（用于调试）
@@ -374,9 +473,18 @@ class VisionProcessor:
                     timeline_entry["segment_mask_ratio"] = 0
 
                 timeline.append(timeline_entry)
+                
+                # 更新状态
+                prev_result = timeline_entry
+                last_forced_timestamp = ts
+                prev_frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
             if (i + 1) % 10 == 0:
                 logger.info(f"已分析 {i + 1}/{len(timestamps)} 帧")
+
+        # 输出运动检测统计
+        if self.motion_detection and motion_skipped_count > 0:
+            logger.info(f"运动检测统计: 跳过 {motion_skipped_count} 帧静止画面，节省 {motion_skipped_count} 次YOLO推理")
 
         logger.info(f"全面分析完成: {len(timeline)}帧, 提取帧数: {len(frames)}")
 
@@ -392,14 +500,22 @@ class VisionProcessor:
         }
 
     def _generate_video_summary(self, timeline: List[Dict], duration: float) -> Dict:
-        """生成视频摘要（包含多模型统计）"""
+        """生成视频摘要（包含多模型统计和运动检测统计）"""
         frames_with_person = [t for t in timeline if t.get("has_person")]
+        
+        # 运动检测统计
+        motion_skipped_count = sum(1 for t in timeline if t.get("motion_skipped", False))
+        total_frames = len(timeline)
+        yolo_inference_count = total_frames - motion_skipped_count
 
         if not frames_with_person:
             return {
                 "has_person": False,
                 "duration": duration,
                 "person_ratio": 0,
+                "motion_skipped_count": motion_skipped_count,
+                "total_frames": total_frames,
+                "yolo_inference_count": yolo_inference_count,
             }
 
         # 姿态变化时间线
@@ -472,6 +588,9 @@ class VisionProcessor:
             "models_used": list(models_used),
             "avg_vote": avg_vote,
             "avg_wearing_variance": avg_wearing_variance,
+            "motion_skipped_count": motion_skipped_count,
+            "total_frames": total_frames,
+            "yolo_inference_count": yolo_inference_count,
         }
 
     def _select_representative_frames(self, timeline: List[Dict], max_frames: int = 10) -> List[int]:
@@ -629,6 +748,13 @@ class VisionProcessor:
             avg_wearing_variance = video_summary.get("avg_wearing_variance", 0)
             if avg_wearing_variance > 0:
                 context_lines.append(f"- 穿着色彩变化: {avg_wearing_variance:.1f}")
+            
+            # 运动检测统计
+            motion_skipped = video_summary.get("motion_skipped_count", 0)
+            if motion_skipped > 0:
+                total_frames = video_summary.get("total_frames", 0)
+                yolo_count = video_summary.get("yolo_inference_count", total_frames)
+                context_lines.append(f"- 运动检测: 跳过{motion_skipped}帧静止画面 (YOLO推理{yolo_count}次)")
 
             context_lines.append("")
             context_lines.append("【各帧详细分析（图片序号对应下方描述）】")

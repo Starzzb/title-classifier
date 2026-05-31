@@ -1,6 +1,7 @@
-"""YOLOv8检测器 - 支持多模型（detect/pose/segment）"""
+"""YOLOv8检测器 - 支持多模型（detect/pose/segment）+ OpenVINO 加速"""
 
 import logging
+import shutil
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 
@@ -19,6 +20,9 @@ YOLO_MODELS = {
     "segment": YOLO_MODEL_DIR / "yolov8n-seg.pt",
 }
 
+# OpenVINO 模型缓存目录
+OPENVINO_MODEL_DIR = YOLO_MODEL_DIR / "openvino"
+
 # COCO 数据集人体类别 ID
 PERSON_CLASS_ID = 0
 
@@ -32,7 +36,7 @@ KEYPOINT_NAMES = [
 
 
 class YOLODetector(BaseDetector):
-    """YOLOv8检测器 - 支持多模型"""
+    """YOLOv8检测器 - 支持多模型 + OpenVINO 加速"""
 
     def __init__(
         self,
@@ -41,6 +45,7 @@ class YOLODetector(BaseDetector):
         confidence: float = 0.5,
         iou_threshold: float = 0.45,
         parallel_loading: bool = True,
+        backend: str = "auto",
     ):
         """
         初始化YOLO检测器
@@ -51,16 +56,20 @@ class YOLODetector(BaseDetector):
             confidence: 置信度阈值
             iou_threshold: IoU阈值
             parallel_loading: 是否并行加载模型
+            backend: 推理后端 ("auto" / "openvino" / "pytorch")
         """
         super().__init__(confidence)
         self.model_types = model_types or ["pose"]
         self.iou_threshold = iou_threshold
         self.device = device or self._detect_device()
         self.parallel_loading = parallel_loading
+        self.backend = self._resolve_backend(backend)
         self._models = {}  # 存储多个模型 {model_type: model}
+        self._backend_type = {}  # 记录每个模型使用的后端 {model_type: "openvino"/"pytorch"}
 
     def _detect_device(self) -> str:
-        """自动检测推理设备"""
+        """自动检测推理设备（CPU 优先）"""
+        # 优先使用 CPU（当前优化目标）
         try:
             import torch
             if torch.cuda.is_available():
@@ -75,8 +84,81 @@ class YOLODetector(BaseDetector):
         except ImportError:
             return "cpu"
 
+    def _resolve_backend(self, backend: str) -> str:
+        """解析推理后端：auto/openvino/pytorch"""
+        if backend == "pytorch":
+            return "pytorch"
+        if backend == "openvino":
+            if not self._check_openvino_available():
+                logger.warning("OpenVINO 不可用，回退到 PyTorch")
+                return "pytorch"
+            return "openvino"
+        # auto 模式：CPU 时优先 OpenVINO，CUDA 时使用 PyTorch
+        if self.device == "cuda":
+            return "pytorch"
+        if self._check_openvino_available():
+            logger.info("检测到 OpenVINO，使用 OpenVINO 后端加速 CPU 推理")
+            return "openvino"
+        return "pytorch"
+
+    @staticmethod
+    def _check_openvino_available() -> bool:
+        """检查 OpenVINO 是否可用"""
+        try:
+            import openvino
+            return True
+        except ImportError:
+            return False
+
+    def _get_openvino_path(self, model_type: str) -> Path:
+        """获取 OpenVINO 模型缓存路径"""
+        return OPENVINO_MODEL_DIR / f"{model_type}_openvino_model"
+
+    def _export_to_openvino(self, model_type: str, pt_path: Path) -> Path:
+        """
+        将 .pt 模型导出为 OpenVINO IR 格式（FP16）
+        
+        Args:
+            model_type: 模型类型 (detect/pose/segment)
+            pt_path: .pt 模型路径
+            
+        Returns:
+            OpenVINO 模型目录路径
+        """
+        from ultralytics import YOLO
+        
+        openvino_path = self._get_openvino_path(model_type)
+        
+        logger.info(f"首次运行，正在将 {model_type} 导出为 OpenVINO FP16 格式...")
+        logger.info(f"源模型: {pt_path}")
+        logger.info(f"目标目录: {openvino_path}")
+        
+        try:
+            # 加载 PyTorch 模型
+            model = YOLO(str(pt_path))
+            
+            # 导出为 OpenVINO 格式 (FP16)
+            export_dir = model.export(format="openvino", half=True)
+            
+            # ultralytics 导出后会创建一个目录，移动到我们的缓存位置
+            export_path = Path(export_dir)
+            if openvino_path.exists():
+                shutil.rmtree(openvino_path)
+            
+            # 如果导出路径和目标路径不同，移动文件
+            if export_path != openvino_path:
+                shutil.move(str(export_path), str(openvino_path))
+            
+            logger.info(f"OpenVINO 模型导出完成: {openvino_path}")
+            return openvino_path
+            
+        except Exception as e:
+            logger.error(f"OpenVINO 导出失败: {e}")
+            logger.warning("将回退使用 PyTorch 模型")
+            raise
+
     def load_model(self) -> bool:
-        """加载YOLO模型"""
+        """加载YOLO模型 - 优先 OpenVINO，回退 PyTorch"""
         if self._loaded:
             return True
 
@@ -89,26 +171,71 @@ class YOLODetector(BaseDetector):
                     logger.warning(f"未知的模型类型: {model_type}，跳过")
                     continue
 
-                model_path = YOLO_MODELS[model_type]
-                logger.info(f"加载YOLO {model_type} 模型: {model_path} (设备: {self.device})")
+                pt_path = YOLO_MODELS[model_type]
+                openvino_path = self._get_openvino_path(model_type)
+                
+                model = None
+                backend_used = "pytorch"
 
-                if not model_path.exists():
-                    logger.error(f"YOLO模型文件不存在: {model_path}")
-                    continue
+                # 优先尝试 OpenVINO
+                if self.backend == "openvino":
+                    try:
+                        if openvino_path.exists():
+                            # 直接加载缓存的 OpenVINO 模型
+                            ov_model_path = openvino_path / f"{model_type}.xml"
+                            if ov_model_path.exists():
+                                logger.info(f"加载 OpenVINO {model_type} 模型: {ov_model_path}")
+                                model = YOLO(str(ov_model_path))
+                                backend_used = "openvino"
+                            else:
+                                # 目录存在但没有 .xml 文件，尝试查找
+                                xml_files = list(openvino_path.glob("*.xml"))
+                                if xml_files:
+                                    logger.info(f"加载 OpenVINO {model_type} 模型: {xml_files[0]}")
+                                    model = YOLO(str(xml_files[0]))
+                                    backend_used = "openvino"
+                                else:
+                                    raise FileNotFoundError(f"OpenVINO 模型目录中未找到 .xml 文件: {openvino_path}")
+                        else:
+                            # 首次运行：导出并缓存
+                            if not pt_path.exists():
+                                logger.error(f"YOLO 源模型文件不存在: {pt_path}")
+                                continue
+                            ov_path = self._export_to_openvino(model_type, pt_path)
+                            ov_model_path = ov_path / f"{model_type}.xml"
+                            if ov_model_path.exists():
+                                model = YOLO(str(ov_model_path))
+                            else:
+                                xml_files = list(ov_path.glob("*.xml"))
+                                if xml_files:
+                                    model = YOLO(str(xml_files[0]))
+                                else:
+                                    raise FileNotFoundError(f"导出后未找到 OpenVINO 模型文件: {ov_path}")
+                            backend_used = "openvino"
+                    except Exception as e:
+                        logger.warning(f"OpenVINO 加载失败，回退到 PyTorch: {e}")
+                        model = None
 
-                try:
-                    model = YOLO(str(model_path))
+                # 回退到 PyTorch
+                if model is None:
+                    if not pt_path.exists():
+                        logger.error(f"YOLO 模型文件不存在: {pt_path}")
+                        continue
+                    logger.info(f"加载 PyTorch {model_type} 模型: {pt_path} (设备: {self.device})")
+                    model = YOLO(str(pt_path))
                     if self.device == "cuda":
                         model.to("cuda")
-                    self._models[model_type] = model
-                    loaded_count += 1
-                    logger.info(f"YOLO {model_type} 模型加载完成")
-                except Exception as e:
-                    logger.error(f"YOLO {model_type} 模型加载失败: {e}")
+                    backend_used = "pytorch"
+
+                self._models[model_type] = model
+                self._backend_type[model_type] = backend_used
+                loaded_count += 1
+                logger.info(f"YOLO {model_type} 模型加载完成 (后端: {backend_used})")
 
             if loaded_count > 0:
                 self._loaded = True
-                logger.info(f"成功加载 {loaded_count}/{len(self.model_types)} 个YOLO模型")
+                backend_summary = ", ".join([f"{k}:{v}" for k, v in self._backend_type.items()])
+                logger.info(f"成功加载 {loaded_count}/{len(self.model_types)} 个YOLO模型 [{backend_summary}]")
                 return True
             else:
                 logger.error("没有成功加载任何YOLO模型")

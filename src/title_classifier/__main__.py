@@ -114,6 +114,9 @@ def cmd_vision(args):
         analysis_step=args.analysis_step,
         debug_dir=debug_dir,
         device=args.device,
+        motion_detection=not args.no_motion_detection,
+        motion_threshold=args.motion_threshold,
+        backend=args.backend,
     )
 
     if not processor.initialize():
@@ -577,6 +580,9 @@ def main():
     vision_cmd.add_argument("--analysis-step", type=float, default=2.0, help="YOLO模式采样间隔（秒，默认2秒）")
     vision_cmd.add_argument("--device", default="cpu", choices=["auto", "cuda", "cpu"], help="推理设备（cpu=默认, auto=自动检测, cuda=GPU需手动安装CUDA版PyTorch）")
     vision_cmd.add_argument("--concurrent", type=int, default=4, help="并发处理视频数（默认4，CPU多核并行）")
+    vision_cmd.add_argument("--backend", default="auto", choices=["auto", "openvino", "pytorch"], help="YOLO推理后端（auto=自动检测, openvino=Intel/AMD CPU加速, pytorch=原始PyTorch）")
+    vision_cmd.add_argument("--no-motion-detection", action="store_true", help="禁用运动检测前置过滤（默认启用）")
+    vision_cmd.add_argument("--motion-threshold", type=float, default=5.0, help="运动检测阈值（变化像素比例%%，低于此值跳过YOLO推理，默认5.0）")
 
     vision_cmd.add_argument("--all", action="store_true", help="处理所有未识别的文件")
     vision_cmd.add_argument("--debug", action="store_true", help="启用调试模式，保存检测结果和VLM输入输出")

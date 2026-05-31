@@ -33,10 +33,18 @@ vlm_frames = 10
 clip_frames = 5
 max_keyframes = 8
 keyframe_threshold = 30.0
+motion_detection = true
+motion_threshold = 5.0       # 变化像素比例阈值（%），低于此值认为是静止画面
+motion_min_interval = 2.0    # 最小强制推理间隔（秒），防止长时间静止后场景跳变
 
 [yolo]
 model_type = "detect"
 confidence = 0.5
+backend = "auto"  # auto / openvino / pytorch
+
+[yolo.openvino]
+precision = "FP16"  # FP16 / INT8
+cache_dir = "models/yolo/openvino"
 
 [yolo.comprehensive]
 enabled = true
