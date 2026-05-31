@@ -689,72 +689,60 @@ class TitleClassifierApp(tk.Tk):
         provider_combo.pack(side=tk.LEFT, padx=4)
         ToolTip(provider_combo, "选择视觉AI服务提供商\n- gcli: Google Gemini（推荐）\n- mimo: 小米MiMo\n- zhipu: 智谱GLM")
 
-        # 推理设备选择
-        device_frame = ttk.LabelFrame(scroll_frame, text="推理设备")
-        device_frame.pack(fill=tk.X, padx=4, pady=4)
+        # 推理引擎配置
+        engine_frame = ttk.LabelFrame(scroll_frame, text="推理引擎")
+        engine_frame.pack(fill=tk.X, padx=4, pady=4)
 
+        # 第一行：推理设备 + YOLO后端
+        engine_row1 = ttk.Frame(engine_frame)
+        engine_row1.pack(fill=tk.X, padx=4, pady=2)
+
+        ttk.Label(engine_row1, text="推理设备:").pack(side=tk.LEFT, padx=(0, 4))
         self.s1c_device_var = tk.StringVar(value="cpu")
-        device_combo = ttk.Combobox(device_frame, textvariable=self.s1c_device_var, values=["cpu", "auto", "cuda"], state="readonly", width=10)
-        device_combo.pack(side=tk.LEFT, padx=4)
-        self.s1c_device_label = ttk.Label(device_frame, text="", foreground="#888888")
-        self.s1c_device_label.pack(side=tk.LEFT, padx=4)
-        ToolTip(device_combo, "推理设备选择\n- cpu: CPU多核并行（推荐，默认）\n- auto: 自动检测\n- cuda: GPU加速（需手动安装CUDA版PyTorch）")
-        # 显示当前GPU状态
-        self._update_device_status()
+        device_combo = ttk.Combobox(engine_row1, textvariable=self.s1c_device_var, values=["cpu", "auto", "cuda"], state="readonly", width=8)
+        device_combo.pack(side=tk.LEFT, padx=(0, 12))
+        ToolTip(device_combo, "推理设备\n- cpu: CPU多核并行（推荐）\n- auto: 自动检测\n- cuda: GPU加速")
 
-        # 检测器选择
+        ttk.Label(engine_row1, text="YOLO后端:").pack(side=tk.LEFT, padx=(0, 4))
+        self.s1c_backend_var = tk.StringVar(value="auto")
+        backend_combo = ttk.Combobox(engine_row1, textvariable=self.s1c_backend_var,
+                                     values=["auto", "openvino", "pytorch"], state="readonly", width=10)
+        backend_combo.pack(side=tk.LEFT, padx=(0, 4))
+        ToolTip(backend_combo, "YOLO推理后端\n\n"
+                "- auto: 自动选择（CPU时用OpenVINO，推荐）\n"
+                "- openvino: Intel/AMD CPU加速（FP16，2-3x）\n"
+                "- pytorch: 原始PyTorch\n\n"
+                "首次使用OpenVINO时会自动导出模型")
+
+        # 第二行：状态显示
+        engine_row2 = ttk.Frame(engine_frame)
+        engine_row2.pack(fill=tk.X, padx=4, pady=(0, 4))
+
+        self.s1c_engine_status = ttk.Label(engine_row2, text="", foreground="#888888")
+        self.s1c_engine_status.pack(side=tk.LEFT)
+        self._update_engine_status()
+
+        # 检测器选项
         det_frame = ttk.LabelFrame(scroll_frame, text="检测器")
         det_frame.pack(fill=tk.X, padx=4, pady=4)
 
-        # YOLO检测器说明
-        yolo_label = ttk.Label(det_frame, text="YOLO姿态检测（默认）")
-        yolo_label.pack(side=tk.LEFT, padx=4)
-        ToolTip(yolo_label, "使用YOLO Pose模型检测人体姿态\n\n"
-                "功能：\n"
-                "- 检测视频中是否有人体\n"
-                "- 分析人体姿态（站立、跪姿、弯腰等）\n"
-                "- 智能选择包含人体的代表性帧\n"
-                "- 将姿态信息作为上下文传给VLM")
-
         # 全面分析模式选项
         self.s1c_comprehensive_var = tk.BooleanVar(value=False)
-        comprehensive_cb = ttk.Checkbutton(det_frame, text="全面分析模式", variable=self.s1c_comprehensive_var)
-        comprehensive_cb.pack(side=tk.LEFT, padx=8)
+        comprehensive_cb = ttk.Checkbutton(det_frame, text="全面分析模式（3模型投票）", variable=self.s1c_comprehensive_var)
+        comprehensive_cb.pack(side=tk.LEFT, padx=4)
         ToolTip(comprehensive_cb, "使用三个YOLO模型进行全面分析\n\n"
-                "功能：\n"
-                "- 同时使用detect、pose、segment三个模型\n"
+                "- detect + pose + segment 三个模型\n"
                 "- 投票决策：至少两个模型检测到人体才认为有人体\n"
-                "- 动态权重：根据置信度自动调整模型权重\n"
                 "- 提供姿态分析、穿着分割等详细信息\n\n"
-                "适用场景：需要更全面、准确的视频分析时使用\n"
-                "注意：全面分析模式会使用更多GPU内存和时间")
+                "注意：会使用更多内存和时间")
 
         # CLIP选项
         self.s1c_use_clip_var = tk.BooleanVar()
-        clip_cb = ttk.Checkbutton(det_frame, text="使用CLIP预分类", variable=self.s1c_use_clip_var)
+        clip_cb = ttk.Checkbutton(det_frame, text="CLIP预分类", variable=self.s1c_use_clip_var)
         clip_cb.pack(side=tk.LEFT, padx=8)
         ToolTip(clip_cb, "使用CLIP模型进行图像预分类\n\n"
-                "功能：\n"
                 "- 快速识别图片内容类别\n"
-                "- 如果置信度足够高，可跳过VLM调用\n\n"
-                "适用场景：大量图片需要快速分类时使用")
-
-        # YOLO推理后端
-        backend_frame = ttk.LabelFrame(scroll_frame, text="YOLO推理后端")
-        backend_frame.pack(fill=tk.X, padx=4, pady=4)
-
-        self.s1c_backend_var = tk.StringVar(value="auto")
-        backend_combo = ttk.Combobox(backend_frame, textvariable=self.s1c_backend_var, 
-                                     values=["auto", "openvino", "pytorch"], state="readonly", width=12)
-        backend_combo.pack(side=tk.LEFT, padx=4)
-        self.s1c_backend_label = ttk.Label(backend_frame, text="", foreground="#888888")
-        self.s1c_backend_label.pack(side=tk.LEFT, padx=4)
-        ToolTip(backend_combo, "YOLO推理后端选择\n\n"
-                "- auto: 自动检测（CPU时使用OpenVINO，推荐）\n"
-                "- openvino: Intel/AMD CPU加速（FP16，速度2-3x）\n"
-                "- pytorch: 原始PyTorch（兼容性最好）\n\n"
-                "首次使用OpenVINO时会自动导出模型（约30秒）")
-        self._update_backend_status()
+                "- 如果置信度足够高，可跳过VLM调用")
 
         # 运动检测选项
         motion_frame = ttk.LabelFrame(scroll_frame, text="运动检测")
@@ -2025,28 +2013,47 @@ class TitleClassifierApp(tk.Tk):
 
         self._run_command(cmd, callback=on_retry_complete)
 
-    def _update_device_status(self):
-        """更新设备状态显示"""
+    def _update_engine_status(self):
+        """更新推理引擎状态显示"""
+        device = self.s1c_device_var.get()
+        backend = self.s1c_backend_var.get()
+        
+        # 检测 OpenVINO
+        openvino_ok = False
+        try:
+            import openvino
+            openvino_ok = True
+        except ImportError:
+            pass
+        
+        # 检测 CUDA
+        cuda_ok = False
         try:
             import torch
             if torch.cuda.is_available():
-                gpu_name = torch.cuda.get_device_name(0)
-                gpu_mem = torch.cuda.get_device_properties(0).total_memory / 1024**3
-                self.s1c_device_label.config(text=f"GPU: {gpu_name} ({gpu_mem:.1f}GB)", foreground="#44aa44")
-            else:
-                self.s1c_device_label.config(text="PyTorch CPU版（推荐）", foreground="#44aa44")
+                cuda_ok = True
         except ImportError:
-            self.s1c_device_label.config(text="PyTorch未安装", foreground="#cc4444")
-
-    def _update_backend_status(self):
-        """更新YOLO后端状态显示"""
-        try:
-            import openvino
-            self.s1c_backend_label.config(text="OpenVINO可用 ✓", foreground="#44aa44")
-        except ImportError:
-            self.s1c_backend_label.config(text="OpenVINO未安装（需手动安装）", foreground="#cc8800")
-        except Exception:
-            self.s1c_device_label.config(text="", foreground="#888888")
+            pass
+        
+        # 构建状态文本
+        if backend == "openvino" and not openvino_ok:
+            status = "⚠ OpenVINO 未安装，将回退到 PyTorch"
+            color = "#cc4444"
+        elif device == "cuda" and not cuda_ok:
+            status = "⚠ CUDA 不可用，将使用 CPU"
+            color = "#cc4444"
+        elif backend == "openvino" and openvino_ok:
+            status = "✓ OpenVINO 加速（FP16，2-3x）"
+            color = "#44aa44"
+        elif device == "cuda" and cuda_ok:
+            gpu_name = torch.cuda.get_device_name(0)
+            status = f"✓ CUDA: {gpu_name}"
+            color = "#44aa44"
+        else:
+            status = "✓ CPU 推理（多核并行）"
+            color = "#44aa44"
+        
+        self.s1c_engine_status.config(text=status, foreground=color)
 
     def _open_latest_debug_dir(self):
         """打开最新的调试目录"""
