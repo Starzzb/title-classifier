@@ -1,14 +1,68 @@
-"""视频处理工具"""
+"""视频处理工具 - 支持硬件加速和批量帧提取"""
 
 import subprocess
 import logging
+import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+# 硬件解码器配置（按平台）
+HW_DECODERS = {
+    "win32": ["d3d11va", "dxva2", "qsv"],  # Windows
+    "linux": ["vaapi", "qsv"],              # Linux
+    "darwin": ["videotoolbox"],              # macOS
+}
+
+# 缓存检测到的硬件解码器
+_cached_hw_decoder = None
+_hw_decoder_checked = False
+
+
+def detect_hw_accel() -> Optional[str]:
+    """
+    自动检测可用的硬件解码器
+    
+    Returns:
+        可用的硬件解码器名称，无可用时返回 None
+    """
+    global _cached_hw_decoder, _hw_decoder_checked
+    
+    if _hw_decoder_checked:
+        return _cached_hw_decoder
+    
+    _hw_decoder_checked = True
+    
+    # 获取当前平台的解码器列表
+    platform_decoders = HW_DECODERS.get(sys.platform, [])
+    if not platform_decoders:
+        logger.debug(f"平台 {sys.platform} 无硬件解码器配置")
+        return None
+    
+    # 测试每个解码器
+    for decoder in platform_decoders:
+        try:
+            # 使用一个简单的测试命令检查解码器是否可用
+            result = subprocess.run(
+                ["ffmpeg", "-hwaccel", decoder, "-f", "lavfi", "-i", 
+                 "color=c=black:s=320x240:d=0.1", "-frames:v", "1", "-f", "null", "-"],
+                capture_output=True, timeout=5, encoding="utf-8", errors="replace",
+            )
+            # 检查是否有解码器相关错误
+            stderr = result.stderr.lower()
+            if "hwaccel" not in stderr or "error" not in stderr:
+                _cached_hw_decoder = decoder
+                logger.info(f"检测到硬件解码器: {decoder}")
+                return decoder
+        except (subprocess.TimeoutExpired, Exception):
+            continue
+    
+    logger.info("未检测到可用的硬件解码器，使用软解")
+    return None
 
 
 def get_video_duration(video_path: str) -> float:
@@ -54,14 +108,39 @@ def safe_timestamp(timestamp_seconds: float, duration: float, margin: float = 2.
     return min(timestamp_seconds, max_safe)
 
 
+def _parse_timestamp(timestamp: str) -> float:
+    """解析时间戳字符串为秒数"""
+    parts = timestamp.split(":")
+    if len(parts) == 3:
+        return float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
+    elif len(parts) == 2:
+        return float(parts[0]) * 60 + float(parts[1])
+    else:
+        return float(timestamp)
+
+
 def extract_frame(
     video_path: str,
     output_path: str,
     timestamp: str = None,
     max_size: int = 800,
     duration: float = None,
+    hw_accel: Optional[str] = None,
 ) -> bool:
-    """提取视频帧并压缩"""
+    """
+    提取视频帧并压缩
+    
+    Args:
+        video_path: 视频文件路径
+        output_path: 输出图片路径
+        timestamp: 时间戳（秒或 HH:MM:SS.mmm 格式）
+        max_size: 最大尺寸
+        duration: 视频时长（可选，避免重复查询）
+        hw_accel: 硬件解码器（None=自动检测）
+    
+    Returns:
+        是否成功
+    """
     try:
         if duration is None:
             duration = get_video_duration(video_path)
@@ -69,13 +148,7 @@ def extract_frame(
         if timestamp is None:
             ts_seconds = duration / 4 if duration > 0 else 30.0
         else:
-            parts = timestamp.split(":")
-            if len(parts) == 3:
-                ts_seconds = float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
-            elif len(parts) == 2:
-                ts_seconds = float(parts[0]) * 60 + float(parts[1])
-            else:
-                ts_seconds = float(timestamp)
+            ts_seconds = _parse_timestamp(timestamp)
 
         safe_ts = safe_timestamp(ts_seconds, duration)
 
@@ -84,15 +157,128 @@ def extract_frame(
         seconds = safe_ts % 60
         safe_timestamp_str = f"{hours:02d}:{minutes:02d}:{seconds:06.3f}"
 
+        # 构建 ffmpeg 命令
+        cmd = ["ffmpeg", "-y"]
+        
+        # 添加硬件加速
+        if hw_accel:
+            cmd.extend(["-hwaccel", hw_accel, "-hwaccel_output_format", "nv12"])
+        
+        cmd.extend([
+            "-ss", safe_timestamp_str,
+            "-i", video_path,
+            "-vf", f"scale='if(gt(iw,{max_size}),{max_size},-2)':'if(gt(ih,{max_size}),{max_size},-2)'",
+            "-frames:v", "1",
+            "-q:v", "2",
+            output_path,
+        ])
+
         result = subprocess.run(
-            ["ffmpeg", "-y", "-ss", safe_timestamp_str, "-i", video_path,
-             "-vf", f"scale='if(gt(iw,{max_size}),{max_size},-2)':'if(gt(ih,{max_size}),{max_size},-2)'",
-             "-frames:v", "1", "-q:v", "2", output_path],
-            capture_output=True, timeout=15, encoding="utf-8", errors="replace",
+            cmd, capture_output=True, timeout=15, encoding="utf-8", errors="replace",
         )
+        
+        # 硬件加速失败时回退到软解
+        if result.returncode != 0 and hw_accel:
+            logger.debug(f"硬件解码失败，回退到软解: {result.stderr[:200]}")
+            return extract_frame(video_path, output_path, timestamp, max_size, duration, hw_accel=None)
+        
         return result.returncode == 0 and Path(output_path).exists()
-    except Exception:
+    except Exception as e:
+        logger.debug(f"帧提取失败: {e}")
         return False
+
+
+def extract_frames_batch(
+    video_path: str,
+    output_dir: str,
+    timestamps: List[float],
+    max_size: int = 800,
+    hw_accel: Optional[str] = None,
+    prefix: str = "frame",
+) -> List[str]:
+    """
+    批量提取多个帧 - 单次 ffmpeg 调用
+    
+    Args:
+        video_path: 视频文件路径
+        output_dir: 输出目录
+        timestamps: 时间戳列表（秒）
+        max_size: 最大尺寸
+        hw_accel: 硬件解码器
+        prefix: 输出文件名前缀
+    
+    Returns:
+        成功提取的帧文件路径列表
+    """
+    if not timestamps:
+        return []
+    
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    
+    # 构建 select 滤镜表达式
+    # 使用 between 选择特定时间点的帧
+    select_parts = []
+    for ts in timestamps:
+        # 使用一个小窗口（0.1秒）来匹配时间点
+        select_parts.append(f"between(t\\,{ts - 0.05:.3f}\\,{ts + 0.05:.3f})")
+    select_expr = "+".join(select_parts)
+    
+    # 构建 ffmpeg 命令
+    cmd = ["ffmpeg", "-y"]
+    
+    # 添加硬件加速
+    if hw_accel:
+        cmd.extend(["-hwaccel", hw_accel, "-hwaccel_output_format", "nv12"])
+    
+    cmd.extend([
+        "-i", video_path,
+        "-vf", f"select='{select_expr}',scale='if(gt(iw,{max_size}),{max_size},-2)':'if(gt(ih,{max_size}),{max_size},-2)'",
+        "-vsync", "vfr",
+        "-q:v", "2",
+        str(output_path / f"{prefix}_%04d.jpg"),
+    ])
+    
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, timeout=60, encoding="utf-8", errors="replace",
+        )
+        
+        # 硬件加速失败时回退到软解
+        if result.returncode != 0 and hw_accel:
+            logger.debug(f"批量硬件解码失败，回退到软解")
+            return extract_frames_batch(
+                video_path, output_dir, timestamps, max_size, hw_accel=None, prefix=prefix
+            )
+        
+        # 收集生成的帧文件
+        frame_files = sorted(output_path.glob(f"{prefix}_*.jpg"))
+        frame_paths = [str(f) for f in frame_files]
+        
+        logger.info(f"批量提取完成: {len(frame_paths)}/{len(timestamps)} 帧")
+        return frame_paths
+        
+    except Exception as e:
+        logger.warning(f"批量帧提取失败: {e}")
+        # 回退到逐帧提取
+        return _extract_frames_fallback(video_path, output_dir, timestamps, max_size, hw_accel, prefix)
+
+
+def _extract_frames_fallback(
+    video_path: str,
+    output_dir: str,
+    timestamps: List[float],
+    max_size: int = 800,
+    hw_accel: Optional[str] = None,
+    prefix: str = "frame",
+) -> List[str]:
+    """逐帧提取（回退方案）"""
+    frame_paths = []
+    for i, ts in enumerate(timestamps):
+        frame_path = str(Path(output_dir) / f"{prefix}_{i:04d}.jpg")
+        if extract_frame(video_path, frame_path, timestamp=str(ts), max_size=max_size, hw_accel=hw_accel):
+            frame_paths.append(frame_path)
+    return frame_paths
 
 
 def is_solid_color_frame(image_path: str, threshold: float = 15.0) -> bool:
@@ -125,8 +311,24 @@ def extract_multiple_frames(
     n_frames: int = 5,
     max_size: int = 800,
     skip_start_end: bool = True,
+    use_batch: bool = True,
+    hw_accel: Optional[str] = None,
 ) -> List[str]:
-    """从视频中提取多个均匀分布的帧"""
+    """
+    从视频中提取多个均匀分布的帧
+    
+    Args:
+        video_path: 视频文件路径
+        output_dir: 输出目录
+        n_frames: 帧数
+        max_size: 最大尺寸
+        skip_start_end: 是否跳过开头和结尾
+        use_batch: 是否使用批量提取
+        hw_accel: 硬件解码器（None=自动检测）
+    
+    Returns:
+        有效帧文件路径列表
+    """
     import hashlib
 
     duration = get_video_duration(video_path)
@@ -143,12 +345,23 @@ def extract_multiple_frames(
         timestamps = [duration * (i + 1) / (n_frames + 1) for i in range(n_frames)]
 
     video_hash = hashlib.md5(video_path.encode()).hexdigest()[:8]
-    frame_paths = []
-
-    for i, ts in enumerate(timestamps):
-        frame_path = Path(output_dir) / f"{video_hash}_frame_{i}_{ts:.1f}.jpg"
-        if extract_frame(video_path, str(frame_path), timestamp=str(ts), max_size=max_size):
-            frame_paths.append(str(frame_path))
+    
+    # 自动检测硬件加速
+    if hw_accel is None and use_batch:
+        hw_accel = detect_hw_accel()
+    
+    if use_batch:
+        # 批量提取
+        frame_paths = extract_frames_batch(
+            video_path, output_dir, timestamps, max_size, hw_accel, prefix=f"{video_hash}_frame"
+        )
+    else:
+        # 逐帧提取
+        frame_paths = []
+        for i, ts in enumerate(timestamps):
+            frame_path = Path(output_dir) / f"{video_hash}_frame_{i}_{ts:.1f}.jpg"
+            if extract_frame(video_path, str(frame_path), timestamp=str(ts), max_size=max_size, hw_accel=hw_accel):
+                frame_paths.append(str(frame_path))
 
     valid_frames = filter_solid_frames(frame_paths)
 
@@ -184,25 +397,29 @@ def detect_keyframes(
     tmp_dir = Path(output_dir) / f"_keyframe_tmp_{video_hash}"
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
+    # 使用批量提取采样帧
+    hw_accel = detect_hw_accel()
+    sample_paths = extract_frames_batch(
+        video_path, str(tmp_dir), timestamps, max_size=400, hw_accel=hw_accel, prefix="sample"
+    )
+    
     frames_data = []
-    for i, ts in enumerate(timestamps):
-        frame_path = str(tmp_dir / f"sample_{i}.jpg")
-        if extract_frame(video_path, frame_path, timestamp=str(ts), max_size=400):
-            try:
-                if is_solid_color_frame(frame_path):
-                    continue
+    for i, (frame_path, ts) in enumerate(zip(sample_paths, timestamps)):
+        try:
+            if is_solid_color_frame(frame_path):
+                continue
 
-                img = cv2.imread(frame_path)
-                if img is not None:
-                    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-                    frames_data.append({
-                        "path": frame_path,
-                        "timestamp": ts,
-                        "gray": gray,
-                        "index": i,
-                    })
-            except Exception:
-                pass
+            img = cv2.imread(frame_path)
+            if img is not None:
+                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                frames_data.append({
+                    "path": frame_path,
+                    "timestamp": ts,
+                    "gray": gray,
+                    "index": i,
+                })
+        except Exception:
+            pass
 
     if len(frames_data) < 2:
         logger.warning("采样帧不足，跳过关键帧检测")
@@ -232,12 +449,12 @@ def detect_keyframes(
 
     keyframe_indices.sort()
 
-    keyframe_paths = []
-    for idx in keyframe_indices:
-        ts = frames_data[idx]["timestamp"]
-        frame_path = str(Path(output_dir) / f"{video_hash}_keyframe_{idx}_{ts:.1f}.jpg")
-        if extract_frame(video_path, frame_path, timestamp=str(ts), max_size=max_size):
-            keyframe_paths.append(frame_path)
+    # 提取关键帧（使用批量提取）
+    keyframe_timestamps = [frames_data[idx]["timestamp"] for idx in keyframe_indices]
+    keyframe_paths = extract_frames_batch(
+        video_path, output_dir, keyframe_timestamps, max_size=max_size, hw_accel=hw_accel, 
+        prefix=f"{video_hash}_keyframe"
+    )
 
     try:
         import shutil

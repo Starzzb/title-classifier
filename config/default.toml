@@ -37,6 +37,10 @@ motion_detection = true
 motion_threshold = 5.0       # 变化像素比例阈值（%），低于此值认为是静止画面
 motion_min_interval = 2.0    # 最小强制推理间隔（秒），防止长时间静止后场景跳变
 
+[vision.decode]
+hw_accel = "auto"            # 硬件解码器: auto / d3d11va / qsv / vaapi / none
+batch_extract = true         # 批量提取帧（减少 ffmpeg 启动次数）
+
 [yolo]
 model_type = "detect"
 confidence = 0.5
