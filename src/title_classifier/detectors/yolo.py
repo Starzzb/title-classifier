@@ -181,36 +181,26 @@ class YOLODetector(BaseDetector):
                 if self.backend == "openvino":
                     try:
                         if openvino_path.exists():
-                            # 直接加载缓存的 OpenVINO 模型
-                            ov_model_path = openvino_path / f"{model_type}.xml"
-                            if ov_model_path.exists():
-                                logger.info(f"加载 OpenVINO {model_type} 模型: {ov_model_path}")
-                                model = YOLO(str(ov_model_path))
+                            # 直接加载缓存的 OpenVINO 模型目录
+                            xml_files = list(openvino_path.glob("*.xml"))
+                            if xml_files:
+                                # ultralytics 需要加载目录而不是单个 .xml 文件
+                                logger.info(f"加载 OpenVINO {model_type} 模型: {openvino_path}")
+                                model = YOLO(str(openvino_path))
                                 backend_used = "openvino"
                             else:
-                                # 目录存在但没有 .xml 文件，尝试查找
-                                xml_files = list(openvino_path.glob("*.xml"))
-                                if xml_files:
-                                    logger.info(f"加载 OpenVINO {model_type} 模型: {xml_files[0]}")
-                                    model = YOLO(str(xml_files[0]))
-                                    backend_used = "openvino"
-                                else:
-                                    raise FileNotFoundError(f"OpenVINO 模型目录中未找到 .xml 文件: {openvino_path}")
+                                raise FileNotFoundError(f"OpenVINO 模型目录中未找到 .xml 文件: {openvino_path}")
                         else:
                             # 首次运行：导出并缓存
                             if not pt_path.exists():
                                 logger.error(f"YOLO 源模型文件不存在: {pt_path}")
                                 continue
                             ov_path = self._export_to_openvino(model_type, pt_path)
-                            ov_model_path = ov_path / f"{model_type}.xml"
-                            if ov_model_path.exists():
-                                model = YOLO(str(ov_model_path))
+                            xml_files = list(ov_path.glob("*.xml"))
+                            if xml_files:
+                                model = YOLO(str(ov_path))
                             else:
-                                xml_files = list(ov_path.glob("*.xml"))
-                                if xml_files:
-                                    model = YOLO(str(xml_files[0]))
-                                else:
-                                    raise FileNotFoundError(f"导出后未找到 OpenVINO 模型文件: {ov_path}")
+                                raise FileNotFoundError(f"导出后未找到 OpenVINO 模型文件: {ov_path}")
                             backend_used = "openvino"
                     except Exception as e:
                         logger.warning(f"OpenVINO 加载失败，回退到 PyTorch: {e}")
