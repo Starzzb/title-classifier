@@ -10,6 +10,7 @@
 - [CLI命令详解](#cli命令详解)
 - [GUI使用说明](#gui使用说明)
 - [YOLO视觉分析](#yolo视觉分析)
+- [OpenVINO CPU加速](#openvino-cpu加速)
 - [音频字幕集成](#音频字幕集成)
 - [VAD分段策略](#vad分段策略)
 - [AI Provider 配置](#ai-provider-配置)
@@ -514,6 +515,189 @@ uv run title-classifier vision --use-yolo --vlm-frames 15 -p gcli
 **final_name格式**：
 ```
 [标签_标签1]_原文件名.mp4
+```
+
+---
+
+## OpenVINO CPU加速
+
+### 为什么需要 OpenVINO？
+
+默认情况下，YOLO 使用 PyTorch 进行推理。在 CPU 上，PyTorch 的性能较差：
+- Python 层开销大
+- 未针对 CPU 指令集优化
+- 内存碎片严重
+
+**OpenVINO** 是 Intel 开源的推理引擎，专门针对 CPU 优化：
+- 利用 AVX2/AVX-512/VNNI 等指令集
+- 模型图优化和算子融合
+- 内存布局优化
+
+### 性能对比
+
+| 后端 | 推理速度 | 精度 | 适用场景 |
+|------|---------|------|---------|
+| PyTorch (FP32) | 1x | 最高 | GPU 或调试 |
+| OpenVINO (FP16) | 2-3x | 极小损失 | **CPU 推荐** |
+| OpenVINO (INT8) | 3-5x | 较小损失 | 极致性能 |
+
+### 使用方法
+
+#### 自动模式（推荐）
+
+首次运行时自动导出 OpenVINO FP16 模型，后续直接加载缓存：
+
+```powershell
+# 自动检测 OpenVINO，CPU 时默认使用
+uv run title-classifier vision --use-yolo -p gcli
+```
+
+#### 指定后端
+
+```powershell
+# 强制使用 OpenVINO
+uv run title-classifier vision --use-yolo --backend openvino -p gcli
+
+# 强制使用 PyTorch
+uv run title-classifier vision --use-yolo --backend pytorch -p gcli
+```
+
+#### 配置文件
+
+在 `config/default.toml` 中配置：
+
+```toml
+[yolo]
+backend = "auto"  # auto / openvino / pytorch
+
+[yolo.openvino]
+precision = "FP16"  # FP16 / INT8
+cache_dir = "models/yolo/openvino"
+```
+
+### 模型缓存
+
+首次运行后，OpenVINO 模型会缓存到 `models/yolo/openvino/` 目录：
+
+```
+models/yolo/openvino/
+├── detect_openvino_model/
+│   ├── yolov8n.xml    # 模型定义
+│   ├── yolov8n.bin    # 模型权重
+│   └── metadata.yaml
+├── pose_openvino_model/
+│   └── ...
+└── segment_openvino_model/
+    └── ...
+```
+
+删除缓存目录后，下次运行会重新导出。
+
+### INT8 量化（高级）
+
+INT8 量化需要校准数据（200-500 张图片），可以进一步提升性能：
+
+```bash
+# 从视频中抽取校准帧
+python scripts/convert_yolo_openvino.py --model pose --calibrate-dir test/ --num-frames 500
+
+# 转换所有模型
+python scripts/convert_yolo_openvino.py --model all --calibrate-dir test/ --num-frames 500
+```
+
+转换完成后，在配置中切换精度：
+
+```toml
+[yolo.openvino]
+precision = "INT8"
+```
+
+> **注意**：INT8 量化会导致轻微精度损失，建议先用 FP16 验证效果。
+
+---
+
+## 运动检测前置过滤
+
+### 为什么需要运动检测？
+
+视频中很多画面是静止的（如监控、对话场景），对这些帧进行 YOLO 推理是浪费。
+
+**运动检测**可以在 YOLO 推理前判断画面是否有变化：
+- 静止帧 → 复用上一帧结果，跳过 YOLO 推理
+- 运动帧 → 正常执行 YOLO 推理
+
+### 性能提升
+
+| 场景 | 静止帧比例 | 推理次数减少 |
+|------|-----------|-------------|
+| 监控视频 | 60-80% | 60-80% |
+| 对话场景 | 30-50% | 30-50% |
+| 动作片 | 5-15% | 5-15% |
+
+### 使用方法
+
+#### 默认启用
+
+运动检测默认启用，无需额外配置：
+
+```powershell
+uv run title-classifier vision --use-yolo -p gcli
+```
+
+#### 禁用运动检测
+
+```powershell
+# 禁用运动检测（每帧都执行 YOLO 推理）
+uv run title-classifier vision --use-yolo --no-motion-detection -p gcli
+```
+
+#### 调整阈值
+
+```powershell
+# 降低阈值（更敏感，更多帧会被判定为运动）
+uv run title-classifier vision --use-yolo --motion-threshold 2.0 -p gcli
+
+# 提高阈值（更不敏感，更多帧会被跳过）
+uv run title-classifier vision --use-yolo --motion-threshold 10.0 -p gcli
+```
+
+#### 配置文件
+
+在 `config/default.toml` 中配置：
+
+```toml
+[vision]
+motion_detection = true
+motion_threshold = 5.0       # 变化像素比例阈值（%）
+motion_min_interval = 2.0    # 最小强制推理间隔（秒）
+```
+
+### 运动检测原理
+
+1. **帧差法**：计算相邻帧的像素差异
+2. **高斯模糊**：降噪，减少压缩伪影影响
+3. **二值化**：超过阈值的像素标记为变化
+4. **变化比例**：计算变化像素占总像素的百分比
+5. **判断**：变化比例 > 阈值 → 有运动
+
+### 防止误判
+
+- **motion_min_interval**：即使画面静止，也每 N 秒强制执行一次 YOLO 推理
+- 防止视频跳转后复用旧结果
+- 默认值：2.0 秒
+
+### 输出统计
+
+运动检测会在日志中输出统计信息：
+
+```
+运动检测统计: 跳过 45 帧静止画面，节省 45 次YOLO推理
+```
+
+视频摘要中也会包含运动检测信息：
+
+```
+- 运动检测: 跳过45帧静止画面 (YOLO推理5次)
 ```
 
 ---
@@ -1054,7 +1238,38 @@ title-classifier db stats
 
 ## 更新日志
 
-### v7.6.0（当前版本）
+### v7.7.0（当前版本）
+
+**新增：OpenVINO CPU 加速**
+
+- 新增 OpenVINO 推理后端，CPU 推理速度提升 2-3x
+- 首次运行自动导出 FP16 模型到 `models/yolo/openvino/`
+- 后续运行直接加载缓存，无需重复导出
+- 自动检测 OpenVINO 可用性，不可用时回退到 PyTorch
+- 新增 `--backend` 参数：auto / openvino / pytorch
+
+**新增：运动检测前置过滤**
+
+- 新增帧差法运动检测，跳过静止画面的 YOLO 推理
+- 静止帧复用上一帧结果，保持时间线完整
+- 新增 `--motion-threshold` 参数：变化像素比例阈值（默认 5%）
+- 新增 `--no-motion-detection` 参数：禁用运动检测
+- 新增 `motion_min_interval` 配置：最小强制推理间隔（默认 2 秒）
+- 监控等静态场景可减少 60-80% 无效推理
+
+**新增：INT8 量化校准脚本**
+
+- 新增 `scripts/convert_yolo_openvino.py`：独立的 INT8 校准工具
+- 从视频中抽取校准帧，生成 INT8 量化的 OpenVINO 模型
+- 不影响主业务流程，可后续单独运行
+
+**配置扩展**
+
+- `[yolo]` 新增 `backend = "auto"`
+- `[yolo.openvino]` 新增 `precision = "FP16"` 和 `cache_dir`
+- `[vision]` 新增 `motion_detection`、`motion_threshold`、`motion_min_interval`
+
+### v7.6.0
 
 **修复：Stage2重命名后文件查找**
 
