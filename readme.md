@@ -10,6 +10,7 @@
 - [CLI命令详解](#cli命令详解)
 - [GUI使用说明](#gui使用说明)
 - [YOLO视觉分析](#yolo视觉分析)
+- [帧数处理流程](#帧数处理流程)
 - [OpenVINO CPU加速](#openvino-cpu加速)
 - [运动检测前置过滤](#运动检测前置过滤)
 - [硬件视频解码](#硬件视频解码)
@@ -1415,6 +1416,75 @@ title-classifier db search --query "关键词"
 title-classifier db stats
 
 # 或使用数据库浏览器打开 data/media.db
+```
+
+### Q13：强制重分类后，视觉识别会产生嵌套中括号吗？
+
+**不会**。代码有防嵌套保护。
+
+**流程说明**：
+```
+1. 原始文件: [旧关键词]_原始标题.mp4
+2. --force 扫描后 CSV:
+   original_title = "原始标题.mp4"  ← 干净标题（已剥离中括号）
+3. 视觉识别 generate_final_name():
+   # 安全兜底：如果 original_title 仍带有 [kw]_ 前缀，剥离
+   clean_title = re.sub(r"^\[[^\]]*\]_?", "", original_title)
+   return f"[{新关键词}]_{clean_title}"
+4. 重命名后: [新关键词]_原始标题.mp4
+```
+
+**关键代码** (`vision.py:1299-1303`):
+```python
+# 安全兜底：如果 original_title 仍带有 [kw]_ 前缀，剥离
+clean_title = re.sub(r"^\[[^\]]*\]_?", "", original_title, count=1)
+prefix = "_".join(kw_list)
+return f"[{prefix}]_{clean_title}"
+```
+
+### Q14：CLIP 模型的作用是什么？
+
+CLIP 模型作为**本地零样本多维分类器**：
+- **三维分类**：服装、动作、发型
+- **预分类过滤**：置信度高时直接使用本地结果，节省 API 调用
+- **动态学习**：支持从云端 VLM 结果中吸收新标签
+
+### Q15：如何搜索更好的 CLIP 模型？
+
+**搜索关键词**：`NSFW CLIP model`、`cosplay CLIP fine-tuned`
+
+**推荐平台**：HuggingFace、CivitAI、GitHub
+
+### Q16：无意义标题检测规则？
+
+| 规则 | 示例 |
+|------|------|
+| IMG/VID/DCIM 前缀 | `IMG_7940`、`VID_20240115` |
+| Telegram 且无中文 | `Telegram@ciyuanb@-merged-...` |
+| 纯 hex/hash | `25bdc148` |
+| 纯数字/日期 | `20240115` |
+| 短标题 | `视频`、`video (1)` |
+| #tag 标题 | `#Cosplay_女仆装`（**不会**被标记） |
+
+### Q17：如何提高处理速度？
+
+1. 减少 VLM 帧数：`--vlm-frames 5`
+2. 减少采样帧数：`--max-sample-frames 30`
+3. 启用运动检测（默认开启）
+4. 使用 OpenVINO 后端（默认开启）
+5. 排除不需要的目录：`--exclude-dir temp`
+
+### Q18：图片模式没有被处理？
+
+**可能原因**：
+1. 图片的 `needs_vision` 不是 `true`
+2. 图片压缩失败
+3. VLM API 调用失败
+
+**解决方法**：
+```powershell
+# 处理所有未处理的文件
+uv run title-classifier vision --all -p gcli
 ```
 
 ---
