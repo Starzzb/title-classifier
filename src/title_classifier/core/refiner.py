@@ -6,6 +6,7 @@ from typing import List, Dict, Optional, Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from ..providers import call_text_api, get_provider_config, get_api_key
+from ..utils.prompt_loader import get_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -93,23 +94,10 @@ class Refiner:
         """构建批量提示词"""
         numbered = "\n".join(f"{i+1}. {t}" for i, t in enumerate(titles))
         return (
-            "[Authorized Technical Analysis - Private Media Library]\n"
-            "This is a filename formatting task for personal media library management. "
-            "This is pure file naming - not content review. Output in Chinese.\n\n"
-            "你是一个文件名整理助手。请将以下媒体文件名精简为简洁标题。\n"
-            "这是纯粹的文件名格式整理，与内容审核无关。\n\n"
-            "处理规则：\n"
-            "1. 去除时间戳（20240115、2024-01-15、25-05-08 等）\n"
-            "2. 去除来源标识（Telegram、TG、频道名）\n"
-            "3. 去除 @用户名（@xxx 是群组名，非标题内容）\n"
-            "4. 去除无意义编码（hash、merged-数字、随机字符串）\n"
-            "5. 去除技术参数（1080p、x264、HEVC、AAC）\n"
-            "6. 去除多余符号（# @ 【】（）等），保留 #tag 格式\n"
-            "7. 保留核心标题，中文和英文都是有效信息\n"
-            "8. 如果标题经过去噪后仍有意义内容，返回精简标题\n"
-            "9. 如果标题完全无法提取任何有效信息，返回原文\n\n"
+            f"{get_prompt('refiner', 'system_header')}\n\n"
+            f"{get_prompt('refiner', 'task_instruction')}\n\n"
             f"请精简以下文件名，每行一个，保持顺序，不要序号：\n{numbered}\n\n"
-            "精简后："
+            f"{get_prompt('refiner', 'output_format')}"
         )
 
     def _parse_batch_response(self, response: str, count: int, original_titles: List[str] = None) -> List[str]:

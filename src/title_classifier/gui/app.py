@@ -693,12 +693,12 @@ class TitleClassifierApp(tk.Tk):
         device_frame = ttk.LabelFrame(scroll_frame, text="推理设备")
         device_frame.pack(fill=tk.X, padx=4, pady=4)
 
-        self.s1c_device_var = tk.StringVar(value="auto")
-        device_combo = ttk.Combobox(device_frame, textvariable=self.s1c_device_var, values=["auto", "cuda", "cpu"], state="readonly", width=10)
+        self.s1c_device_var = tk.StringVar(value="cpu")
+        device_combo = ttk.Combobox(device_frame, textvariable=self.s1c_device_var, values=["cpu", "auto", "cuda"], state="readonly", width=10)
         device_combo.pack(side=tk.LEFT, padx=4)
         self.s1c_device_label = ttk.Label(device_frame, text="", foreground="#888888")
         self.s1c_device_label.pack(side=tk.LEFT, padx=4)
-        ToolTip(device_combo, "推理设备选择\n- auto: 自动检测GPU（推荐）\n- cuda: 强制使用GPU\n- cpu: 强制使用CPU\n\n需要安装CUDA版PyTorch才能使用GPU加速")
+        ToolTip(device_combo, "推理设备选择\n- cpu: CPU多核并行（推荐，默认）\n- auto: 自动检测\n- cuda: GPU加速（需手动安装CUDA版PyTorch）")
         # 显示当前GPU状态
         self._update_device_status()
 
@@ -898,6 +898,17 @@ class TitleClassifierApp(tk.Tk):
         ToolTip(retry_btn, "重试之前视觉识别失败的行\n\n"
                 "只处理 vision_failed=true 的行\n"
                 "成功后自动清除失败标记")
+
+        ttk.Separator(btn_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8)
+
+        debug_btn = ttk.Button(btn_frame, text="查看调试结果", command=self._open_debug_browser)
+        debug_btn.pack(side=tk.LEFT, padx=4)
+        ToolTip(debug_btn, "浏览并打开已有的调试结果\n\n"
+                "查看之前视觉识别保存的调试数据：\n"
+                "- 每帧的YOLO检测结果（detect/pose/segment）\n"
+                "- 投票决策详情\n"
+                "- 姿态关键点\n"
+                "- VLM输入输出")
 
     def _build_stage2_tab(self):
         """构建Stage2重命名标签页"""
@@ -1873,10 +1884,10 @@ class TitleClassifierApp(tk.Tk):
         else:
             self._debug_enabled = False
 
-        # 定义完成回调，用于打开调试窗口 + 同步数据库
+        # 定义完成回调，用于同步数据库
         def on_vision_complete():
             if getattr(self, '_debug_enabled', False):
-                self._open_latest_debug_dir()
+                print('[调试] 调试数据已保存，点击"查看调试结果"按钮可查看')
             # 同步视觉识别结果到数据库
             self._sync_csv_to_db(csv)
 
@@ -1939,7 +1950,7 @@ class TitleClassifierApp(tk.Tk):
                 gpu_mem = torch.cuda.get_device_properties(0).total_memory / 1024**3
                 self.s1c_device_label.config(text=f"GPU: {gpu_name} ({gpu_mem:.1f}GB)", foreground="#44aa44")
             else:
-                self.s1c_device_label.config(text="PyTorch CPU版（无CUDA）", foreground="#cc4444")
+                self.s1c_device_label.config(text="PyTorch CPU版（推荐）", foreground="#44aa44")
         except ImportError:
             self.s1c_device_label.config(text="PyTorch未安装", foreground="#cc4444")
         except Exception:
@@ -1964,6 +1975,129 @@ class TitleClassifierApp(tk.Tk):
         try:
             from .debug_window import DebugWindow
             DebugWindow(self, str(latest_dir))
+        except Exception as e:
+            print(f"[错误] 打开调试窗口失败: {e}")
+            messagebox.showerror("错误", f"打开调试窗口失败: {e}")
+
+    def _open_debug_browser(self):
+        """浏览并选择调试目录"""
+        debug_dir = PROJECT_DIR / "data" / "debug"
+        if not debug_dir.exists():
+            messagebox.showinfo("提示", "调试目录不存在\n\n请先运行视觉识别并启用调试模式。")
+            return
+
+        # 收集所有调试子目录
+        subdirs = sorted(
+            [d for d in debug_dir.iterdir() if d.is_dir()],
+            key=lambda p: p.stat().st_mtime,
+            reverse=True
+        )
+        if not subdirs:
+            messagebox.showinfo("提示", "调试目录为空\n\n请先运行视觉识别并启用调试模式。")
+            return
+
+        # 创建选择对话框
+        dialog = tk.Toplevel(self)
+        dialog.title("选择调试结果")
+        dialog.geometry("600x500")
+        dialog.transient(self)
+        dialog.grab_set()
+
+        ttk.Label(dialog, text="选择要查看的调试结果：", font=("Microsoft YaHei", 10, "bold")).pack(padx=10, pady=(10, 5), anchor=tk.W)
+
+        # 搜索框
+        search_frame = ttk.Frame(dialog)
+        search_frame.pack(fill=tk.X, padx=10, pady=5)
+        ttk.Label(search_frame, text="搜索:").pack(side=tk.LEFT)
+        search_var = tk.StringVar()
+        search_entry = ttk.Entry(search_frame, textvariable=search_var, width=40)
+        search_entry.pack(side=tk.LEFT, padx=5)
+
+        # 列表框
+        list_frame = ttk.Frame(dialog)
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+        columns = ("name", "time", "frames")
+        tree = ttk.Treeview(list_frame, columns=columns, show="headings", selectmode="browse")
+        tree.heading("name", text="目录名")
+        tree.heading("time", text="创建时间")
+        tree.heading("frames", text="帧数")
+        tree.column("name", width=280)
+        tree.column("time", width=150)
+        tree.column("frames", width=60)
+
+        scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=tree.yview)
+        tree.configure(yscrollcommand=scrollbar.set)
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # 填充数据
+        def fill_tree(filter_text=""):
+            for item in tree.get_children():
+                tree.delete(item)
+            for d in subdirs:
+                name = d.name
+                if filter_text and filter_text.lower() not in name.lower():
+                    continue
+                mtime = d.stat().st_mtime
+                time_str = __import__("datetime").datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
+                # 统计帧数
+                detection_dir = d / "detection"
+                frame_count = len(list(detection_dir.glob("*_result.json"))) if detection_dir.exists() else 0
+                tree.insert("", tk.END, values=(name, time_str, frame_count), iid=str(d))
+
+        fill_tree()
+
+        # 搜索过滤
+        def on_search(*_):
+            fill_tree(search_var.get())
+
+        search_var.trace_add("write", on_search)
+
+        # 双击打开
+        def on_double_click(event):
+            selected = tree.selection()
+            if selected:
+                dir_path = selected[0]
+                dialog.destroy()
+                self._open_debug_window(dir_path)
+
+        tree.bind("<Double-1>", on_double_click)
+
+        # 按钮
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        def on_open():
+            selected = tree.selection()
+            if not selected:
+                messagebox.showwarning("提示", "请先选择一个调试结果")
+                return
+            dir_path = selected[0]
+            dialog.destroy()
+            self._open_debug_window(dir_path)
+
+        ttk.Button(btn_frame, text="打开", command=on_open).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(btn_frame, text="取消", command=dialog.destroy).pack(side=tk.RIGHT, padx=5)
+
+        # 也支持手动选择目录
+        def on_browse():
+            from tkinter import filedialog
+            selected_dir = filedialog.askdirectory(
+                title="选择调试目录",
+                initialdir=str(debug_dir)
+            )
+            if selected_dir:
+                dialog.destroy()
+                self._open_debug_window(selected_dir)
+
+        ttk.Button(btn_frame, text="浏览其他目录...", command=on_browse).pack(side=tk.LEFT, padx=5)
+
+    def _open_debug_window(self, debug_dir: str):
+        """打开调试窗口"""
+        try:
+            from .debug_window import DebugWindow
+            DebugWindow(self, debug_dir)
         except Exception as e:
             print(f"[错误] 打开调试窗口失败: {e}")
             messagebox.showerror("错误", f"打开调试窗口失败: {e}")

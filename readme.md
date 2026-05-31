@@ -118,11 +118,43 @@ uv run python scripts/download_models.py
 uv run python scripts/download_yolo_models.py
 ```
 
-| 模型 | 大小 | 功能 |
-|------|------|------|
-| `yolov8n.pt` | 6MB | 人体检测 |
-| `yolov8n-pose.pt` | 7MB | 姿态估计 |
-| `yolov8n-seg.pt` | 7MB | 实例分割 |
+| 模型 | 大小 | 功能 | 说明 |
+|------|------|------|------|
+| `yolov8n.pt` | 6MB | 人体检测 | nano，最快 |
+| `yolov8s-pose.pt` | 22MB | 姿态估计 | small，精度/速度均衡（推荐） |
+| `yolov8n-seg.pt` | 7MB | 实例分割 | nano，最快 |
+
+> **模型选择**：默认使用 `yolov8s-pose`（small），精度比 nano 提升 ~3-5% mAP，CPU 推理 ~100ms/帧。
+> 如需更高速度，可改回 `yolov8n-pose`（6MB，~50ms/帧）。
+> 修改 `src/title_classifier/detectors/yolo.py` 中的 `YOLO_MODELS` 配置即可。
+
+#### 切换更高精度模型
+
+pose 模型支持 5 种精度等级，按需选择：
+
+| 模型 | 大小 | CPU推理 | 精度 | 适用场景 |
+|------|------|---------|------|----------|
+| `yolov8n-pose.pt` | 6.5MB | ~50ms | 低 | 批量处理、速度优先 |
+| `yolov8s-pose.pt` | 22MB | ~100ms | 中 | **默认，均衡** |
+| `yolov8m-pose.pt` | 52MB | ~200ms | 高 | 精度优先 |
+| `yolov8l-pose.pt` | 87MB | ~400ms | 很高 | 高精度需求 |
+| `yolov8x-pose.pt` | 136MB | ~600ms | 最高 | 最高精度，速度慢 |
+
+**切换步骤**：
+
+```powershell
+# 1. 下载模型（以 medium 为例）
+cd models/yolo
+curl -L -o yolov8m-pose.pt "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolov8m-pose.pt"
+
+# 2. 修改配置
+# 编辑 src/title_classifier/detectors/yolo.py 第 18 行：
+#   "pose": YOLO_MODEL_DIR / "yolov8s-pose.pt",
+# 改为：
+#   "pose": YOLO_MODEL_DIR / "yolov8m-pose.pt",
+```
+
+> **注意**：detect 和 segment 模型也支持同样切换（`yolov8n` → `yolov8s` → `yolov8m` → `yolov8l` → `yolov8x`），下载对应文件并修改 `YOLO_MODELS` 配置即可。
 
 **CLIP 模型**（可选，用于图像预分类）：
 
@@ -762,131 +794,59 @@ GUI 所有操作自动同步到数据库：
 
 ---
 
-## GPU 加速
+## CPU 多线程推理
 
-### 支持的模型
+### 为什么不用 CUDA
 
-| 模型 | GPU加速 | 显存要求 | 加速效果 |
-|------|---------|---------|----------|
-| YOLO (yolov8) | ✅ | >= 4GB | ~10x (200ms→20ms/帧) |
-| CLIP | ✅ | >= 2GB | ~10x (500ms→50ms) |
-| Silero VAD | ❌ CPU | - | 计算量小，无需GPU |
-| VLM (云端API) | - | - | 不受本地设备影响 |
+本项目默认使用 **CPU 版 PyTorch**（~250MB），不再推荐 CUDA 版（~2.4GB）。原因：
 
-### 安装 CUDA 版 PyTorch
+| 问题 | 说明 |
+|------|------|
+| **uv lock 冲突** | `uv run` 会自动同步 lockfile，将 CUDA 版覆盖回 CPU 版，每次需加 `--no-sync` |
+| **依赖膨胀** | CUDA 版 PyTorch ~4.4GB，CPU 版 ~250MB，差 18 倍 |
+| **并发限制** | CUDA 不支持多线程并发推理，必须串行执行（`_gpu_lock`） |
+| **多任务死锁** | 不能同时运行两个 CUDA 模式的视觉识别任务 |
+| **收益有限** | YOLO 单帧推理 200ms→20ms，但 VLM 调用（云端 API）才是瓶颈 |
 
-> **注意**：首次 `uv sync` 安装的是 **CPU 版** PyTorch（~250MB），不支持 GPU 加速。
-> 需要手动替换为 CUDA 版（~2.4GB）才能使用 GPU。
-
-#### 1. 确认 GPU 和驱动版本
-
-```bash
-nvidia-smi
-```
-
-查看 `Driver Version` 和 `CUDA Version`：
-- 驱动 >= 525.x → 支持 CUDA 12.x（推荐）
-- 驱动 >= 450.x → 支持 CUDA 11.x
-
-#### 2. 替换为 CUDA 版 PyTorch
-
-```bash
-# CUDA 12.x（推荐，约 2.4GB，下载需较长时间）
-uv pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cu124
-
-# 或 CUDA 11.8（约 2.6GB）
-uv pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cu118
-```
-
-> **提示**：加 `--force-reinstall` 是为了强制替换已安装的 CPU 版。如网络慢可尝试挂代理或使用国内镜像。
-
-> **重要**：`uv run` 会自动同步 lockfile，将 CUDA 版覆盖回 CPU 版。安装 CUDA 版后，运行命令时需加 `--no-sync`：
-> ```bash
-> uv run --no-sync title-classifier vision --use-yolo -p gcli
-> uv run --no-sync title-classifier gui
-> ```
-> 或直接使用 `.venv\Scripts\python`：
-> ```bash
-> .venv\Scripts\python -m title_classifier vision --use-yolo -p gcli
-> ```
-
-#### 3. 验证安装
-
-```bash
-uv run --no-sync python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}'); print(f'GPU: {torch.cuda.get_device_name(0)}' if torch.cuda.is_available() else 'No GPU')"
-```
-
-返回 `CUDA: True` 即表示安装成功。
+**CPU 多核并行的优势**：20 核 CPU 可同时处理 4 个视频（`--concurrent 4`），总吞吐量反而更高。
 
 ### 使用方式
 
-> **注意**：安装 CUDA 版后，所有 `uv run` 命令需加 `--no-sync` 防止覆盖。
-
 **CLI：**
 ```bash
-# 自动检测（推荐）
-uv run --no-sync title-classifier vision --use-yolo -p gcli
+# 默认 CPU 模式
+uv run title-classifier vision --use-yolo -p gcli
 
-# 强制使用GPU
-uv run --no-sync title-classifier vision --use-yolo --device cuda -p gcli
-
-# 强制使用CPU
-uv run --no-sync title-classifier vision --use-yolo --device cpu -p gcli
+# 指定并发数（推荐 4）
+uv run title-classifier vision --use-yolo --concurrent 4 -p gcli
 ```
 
 **GUI：**
 ```bash
-uv run --no-sync title-classifier gui
+uv run title-classifier gui
 ```
 
-视觉识别标签页的"推理设备"下拉框选择 auto/cuda/cpu。
+视觉识别标签页的"推理设备"下拉框选择 cpu（默认）。
 
-**配置文件** `config/default.toml`：
-```toml
-[general]
-device = "auto"  # auto / cuda / cpu
-```
+### 并发策略
 
-### 自动模式与并发
+| 模式 | YOLO推理 | VLM调用 | 并发数 |
+|------|----------|---------|--------|
+| cpu（默认） | CPU多核并行 | 并发 | min(cores-1, 4) |
 
-| 设备模式 | YOLO推理 | VLM调用 | 并发数 |
-|----------|----------|---------|--------|
-| auto (有GPU) | GPU串行 | 并发 | 1 |
-| auto (无GPU) | CPU并行 | 并发 | min(cores-1, 4) |
-| cuda | GPU串行 | 并发 | 1 |
-| cpu | CPU并行 | 并发 | min(cores-1, 4) |
-
-- **GPU模式**：CUDA不支持多线程并发推理，YOLO串行执行，VLM API并发调用
 - **CPU模式**：利用多核CPU并行推理，多个视频同时处理
-- **auto模式**：自动检测GPU，选择最优并发策略
+- **并发数**：默认 `min(cores-1, 4)`，GUI 中可手动调整
 
 ### 多任务并行
 
-> **注意**：不能同时运行两个CUDA模式的视觉识别任务，会导致GPU死锁。
-
-可以同时处理多个CSV，但必须使用不同的推理设备：
+可以同时运行多个实例处理不同 CSV：
 
 ```bash
-# 终端1：GUI + CUDA模式（处理CSV1）
-uv run --no-sync title-classifier gui
-# 在GUI中选择"推理设备: cuda"，加载CSV1
+# 终端1：GUI（处理CSV1）
+uv run title-classifier gui
 
-# 终端2：CLI + CPU模式（处理CSV2）
-uv run --no-sync title-classifier vision -c "data/output/Movies/title_review.csv" --use-yolo --device cpu --concurrent 4 -p gcli
-```
-
-| 终端 | 模式 | 处理速度 | 说明 |
-|------|------|----------|------|
-| 终端1 GUI | CUDA | 快（20ms/帧） | GPU推理，串行YOLO |
-| 终端2 CLI | CPU | 慢（200ms/帧） | CPU多核并行，--concurrent 4 |
-
-也可以两个GUI实例，分别选择不同的推理设备：
-```bash
-# 终端1：GUI选择 cuda
-uv run --no-sync title-classifier gui
-
-# 终端2：GUI选择 cpu
-uv run --no-sync title-classifier gui
+# 终端2：CLI（处理CSV2）
+uv run title-classifier vision -c "data/output/Movies/title_review.csv" --use-yolo --concurrent 4 -p gcli
 ```
 
 ### VLM失败处理
@@ -909,9 +869,9 @@ uv run --no-sync title-classifier vision -c "data/output/Download/title_review.c
 
 ### 设备检测逻辑
 
-- `auto`（默认）：检测CUDA可用 + 显存>=4GB → 使用GPU，否则CPU
-- `cuda`：强制GPU，CUDA不可用时报错
-- `cpu`：强制CPU
+- `auto`（默认）：使用 CPU
+- `cpu`：强制 CPU（推荐）
+- `cuda`：强制 GPU，CUDA 不可用时回退到 CPU（需要手动安装 CUDA 版 PyTorch）
 
 ---
 
@@ -934,7 +894,6 @@ title-classifier/
 │       │
 │       ├── detectors/
 │       │   ├── base.py              # 检测器基类
-│       │   ├── uhd.py               # UHD人体检测（已移除）
 │       │   ├── yolo.py              # YOLO检测
 │       │   └── clip.py              # CLIP分类
 │       │
@@ -963,7 +922,6 @@ title-classifier/
 │
 ├── models/
 │   ├── clip/                        # CLIP模型（自动下载）
-│   ├── human_detection/             # UHD模型（已移除，不再使用）
 │   └── yolo/                        # YOLO模型（自动下载）
 │
 ├── scripts/

@@ -1,0 +1,29 @@
+{
+  "_comment": "提示词配置示例 - 只写想修改的字段，其他字段会继承默认值",
+  "_说明": "每个场景包含3段：system_header(系统头部)、task_instruction(任务说明)、output_format(输出格式)",
+
+  "_示例1_修改视频分析的任务说明": {
+    "vision_video": {
+      "task_instruction": "分析视频内容，重点描述：\n1. 人物动作和姿态\n2. 服装和外观特征\n3. 场景环境"
+    }
+  },
+
+  "_示例2_修改系统头部": {
+    "vision_video": {
+      "system_header": "[My Custom Header]\nThis is my custom system prompt."
+    }
+  },
+
+  "_示例3_修改标题精简规则": {
+    "refiner": {
+      "task_instruction": "你是一个文件名整理助手。请将以下媒体文件名精简为简洁标题。\n\n处理规则：\n1. 去除时间戳\n2. 去除来源标识\n3. 保留核心标题"
+    }
+  },
+
+  "_示例4_修改音频转录": {
+    "audio": {
+      "task_instruction": "Transcribe ALL speech content in this audio to English.",
+      "output_format": "Output English transcription only."
+    }
+  }
+}

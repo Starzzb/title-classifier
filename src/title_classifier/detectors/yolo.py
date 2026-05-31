@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 YOLO_MODEL_DIR = Path(__file__).parent.parent.parent.parent / "models" / "yolo"
 YOLO_MODELS = {
     "detect": YOLO_MODEL_DIR / "yolov8n.pt",
-    "pose": YOLO_MODEL_DIR / "yolov8n-pose.pt",
+    "pose": YOLO_MODEL_DIR / "yolov8s-pose.pt",
     "segment": YOLO_MODEL_DIR / "yolov8n-seg.pt",
 }
 

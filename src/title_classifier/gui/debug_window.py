@@ -108,11 +108,16 @@ class DebugWindow(tk.Toplevel):
         self.notebook = ttk.Notebook(right_frame)
         self.notebook.pack(fill=tk.BOTH, expand=True)
 
-        # 模型输出标签页
-        self.json_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.json_frame, text="模型输出")
-        self.json_text = scrolledtext.ScrolledText(self.json_frame, wrap=tk.WORD, font=("Consolas", 9))
-        self.json_text.pack(fill=tk.BOTH, expand=True)
+        # 模型输出标签页（带子标签页）
+        self.model_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.model_frame, text="模型输出")
+        self._build_model_output_tab()
+
+        # 投票决策标签页
+        self.vote_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.vote_frame, text="投票决策")
+        self.vote_text = scrolledtext.ScrolledText(self.vote_frame, wrap=tk.WORD, font=("Consolas", 9))
+        self.vote_text.pack(fill=tk.BOTH, expand=True)
 
         # VLM Prompt标签页
         self.prompt_frame = ttk.Frame(self.notebook)
@@ -174,6 +179,35 @@ class DebugWindow(tk.Toplevel):
             self.summary_text.insert(tk.END, json.dumps(self.summary, ensure_ascii=False, indent=2))
             self.summary_text.configure(state="disabled")
 
+    def _build_model_output_tab(self):
+        """构建模型输出标签页（带子标签页分开展示三个模型）"""
+        self.model_notebook = ttk.Notebook(self.model_frame)
+        self.model_notebook.pack(fill=tk.BOTH, expand=True)
+
+        # 综合概览子标签页
+        self.overview_frame = ttk.Frame(self.model_notebook)
+        self.model_notebook.add(self.overview_frame, text="综合概览")
+        self.overview_text = scrolledtext.ScrolledText(self.overview_frame, wrap=tk.WORD, font=("Consolas", 9))
+        self.overview_text.pack(fill=tk.BOTH, expand=True)
+
+        # Detect模型子标签页
+        self.detect_frame = ttk.Frame(self.model_notebook)
+        self.model_notebook.add(self.detect_frame, text="Detect 检测")
+        self.detect_text = scrolledtext.ScrolledText(self.detect_frame, wrap=tk.WORD, font=("Consolas", 9))
+        self.detect_text.pack(fill=tk.BOTH, expand=True)
+
+        # Pose模型子标签页
+        self.pose_frame = ttk.Frame(self.model_notebook)
+        self.model_notebook.add(self.pose_frame, text="Pose 姿态")
+        self.pose_text = scrolledtext.ScrolledText(self.pose_frame, wrap=tk.WORD, font=("Consolas", 9))
+        self.pose_text.pack(fill=tk.BOTH, expand=True)
+
+        # Segment模型子标签页
+        self.segment_frame = ttk.Frame(self.model_notebook)
+        self.model_notebook.add(self.segment_frame, text="Segment 分割")
+        self.segment_text = scrolledtext.ScrolledText(self.segment_frame, wrap=tk.WORD, font=("Consolas", 9))
+        self.segment_text.pack(fill=tk.BOTH, expand=True)
+
     def _build_vlm_frames_tab(self):
         """构建VLM帧预览标签页"""
         if not self.vlm_frames:
@@ -216,7 +250,7 @@ class DebugWindow(tk.Toplevel):
             self.current_frame_idx = 0
             self._display_frame(0)
         else:
-            self.json_text.insert(tk.END, "无检测帧数据")
+            self.overview_text.insert(tk.END, "无检测帧数据")
 
     def _display_frame(self, idx: int):
         """显示指定帧"""
@@ -225,18 +259,186 @@ class DebugWindow(tk.Toplevel):
 
         self.current_frame_idx = idx
         data = self.frame_data[idx]
+        result = data["result"]
 
         # 更新帧标签
         self.frame_label.configure(text=f"帧 {idx + 1}/{len(self.frame_data)}")
 
-        # 更新模型输出
-        self.json_text.configure(state="normal")
-        self.json_text.delete("1.0", tk.END)
-        self.json_text.insert(tk.END, json.dumps(data["result"], ensure_ascii=False, indent=2))
-        self.json_text.configure(state="disabled")
+        # 更新综合概览
+        self._update_overview(result)
+
+        # 更新各模型详情
+        self._update_detect_tab(result)
+        self._update_pose_tab(result)
+        self._update_segment_tab(result)
+
+        # 更新投票决策
+        self._update_vote_tab(result)
 
         # 更新图片
         self._refresh_image()
+
+    def _update_overview(self, result: dict):
+        """更新综合概览标签页"""
+        self.overview_text.configure(state="normal")
+        self.overview_text.delete("1.0", tk.END)
+
+        overview = {
+            "timestamp": result.get("timestamp"),
+            "has_person": result.get("has_person"),
+            "confidence": result.get("confidence"),
+            "models_used": result.get("models_used", []),
+            "vote_count": result.get("vote_count"),
+        }
+        self.overview_text.insert(tk.END, json.dumps(overview, ensure_ascii=False, indent=2))
+        self.overview_text.configure(state="disabled")
+
+    def _update_detect_tab(self, result: dict):
+        """更新Detect模型标签页"""
+        self.detect_text.configure(state="normal")
+        self.detect_text.delete("1.0", tk.END)
+
+        detection_details = result.get("detection_details", [])
+        if detection_details:
+            self.detect_text.insert(tk.END, "【Detect 检测模型结果】\n")
+            self.detect_text.insert(tk.END, f"检测到 {len(detection_details)} 个人体\n\n")
+            for i, person in enumerate(detection_details):
+                self.detect_text.insert(tk.END, f"--- 人体 {i + 1} ---\n")
+                self.detect_text.insert(tk.END, json.dumps(person, ensure_ascii=False, indent=2))
+                self.detect_text.insert(tk.END, "\n\n")
+        else:
+            self.detect_text.insert(tk.END, "【Detect 检测模型结果】\n")
+            self.detect_text.insert(tk.END, "未检测到人体\n")
+            self.detect_text.insert(tk.END, f"\n原始数据:\n{json.dumps(result.get('detection_details', []), ensure_ascii=False, indent=2)}")
+
+        self.detect_text.configure(state="disabled")
+
+    def _update_pose_tab(self, result: dict):
+        """更新Pose模型标签页"""
+        self.pose_text.configure(state="normal")
+        self.pose_text.delete("1.0", tk.END)
+
+        pose_analysis = result.get("pose_analysis", [])
+        visible_keypoints = result.get("visible_keypoints", 0)
+        keypoints = result.get("keypoints", {})
+
+        self.pose_text.insert(tk.END, "【Pose 姿态模型结果】\n\n")
+
+        # 姿态分析结果
+        self.pose_text.insert(tk.END, f"姿态分析: {', '.join(pose_analysis) if pose_analysis else '无'}\n")
+        self.pose_text.insert(tk.END, f"可见关键点: {visible_keypoints}/17\n\n")
+
+        # 关键点详情
+        if keypoints:
+            self.pose_text.insert(tk.END, "【关键点详情】\n")
+            self.pose_text.insert(tk.END, f"{'名称':<20} {'X':>8} {'Y':>8} {'置信度':>8} {'状态':<6}\n")
+            self.pose_text.insert(tk.END, "-" * 60 + "\n")
+
+            # COCO 17点顺序
+            keypoint_names = [
+                "nose", "left_eye", "right_eye", "left_ear", "right_ear",
+                "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
+                "left_wrist", "right_wrist", "left_hip", "right_hip",
+                "left_knee", "right_knee", "left_ankle", "right_ankle",
+            ]
+
+            for name in keypoint_names:
+                if name in keypoints:
+                    kpt = keypoints[name]
+                    x = kpt.get("x", 0)
+                    y = kpt.get("y", 0)
+                    conf = kpt.get("conf", 0)
+                    status = "可见" if conf > 0.5 else "遮挡"
+                    self.pose_text.insert(tk.END, f"{name:<20} {x:>8.1f} {y:>8.1f} {conf:>8.3f} {status:<6}\n")
+                else:
+                    self.pose_text.insert(tk.END, f"{name:<20} {'--':>8} {'--':>8} {'--':>8} {'缺失':<6}\n")
+        else:
+            self.pose_text.insert(tk.END, "无关键点数据\n")
+
+        self.pose_text.configure(state="disabled")
+
+    def _update_segment_tab(self, result: dict):
+        """更新Segment模型标签页"""
+        self.segment_text.configure(state="normal")
+        self.segment_text.delete("1.0", tk.END)
+
+        segment_details = result.get("segment_details", [])
+        wearing_analysis = result.get("wearing_analysis", {})
+
+        self.segment_text.insert(tk.END, "【Segment 分割模型结果】\n\n")
+
+        if segment_details:
+            self.segment_text.insert(tk.END, f"检测到 {len(segment_details)} 个分割区域\n\n")
+            for i, seg in enumerate(segment_details):
+                self.segment_text.insert(tk.END, f"--- 分割区域 {i + 1} ---\n")
+                self.segment_text.insert(tk.END, json.dumps(seg, ensure_ascii=False, indent=2))
+                self.segment_text.insert(tk.END, "\n\n")
+        else:
+            self.segment_text.insert(tk.END, "未检测到分割区域\n\n")
+
+        # 穿着分析
+        self.segment_text.insert(tk.END, "【穿着分析】\n")
+        if wearing_analysis.get("has_wearing"):
+            self.segment_text.insert(tk.END, f"检测到穿着: 是\n")
+            self.segment_text.insert(tk.END, f"颜色方差: {wearing_analysis.get('color_variance', 0):.2f}\n")
+            avg_color = wearing_analysis.get("avg_color_bgr", [])
+            if avg_color:
+                self.segment_text.insert(tk.END, f"平均颜色 (BGR): [{avg_color[0]:.0f}, {avg_color[1]:.0f}, {avg_color[2]:.0f}]\n")
+            self.segment_text.insert(tk.END, f"\n完整数据:\n{json.dumps(wearing_analysis, ensure_ascii=False, indent=2)}\n")
+        else:
+            self.segment_text.insert(tk.END, "未检测到穿着\n")
+
+        self.segment_text.configure(state="disabled")
+
+    def _update_vote_tab(self, result: dict):
+        """更新投票决策标签页"""
+        self.vote_text.configure(state="normal")
+        self.vote_text.delete("1.0", tk.END)
+
+        self.vote_text.insert(tk.END, "【三模型投票决策】\n\n")
+
+        # 模型使用情况
+        models_used = result.get("models_used", [])
+        self.vote_text.insert(tk.END, f"使用的模型: {', '.join(models_used) if models_used else '无'}\n")
+        self.vote_text.insert(tk.END, f"投票数: {result.get('vote_count', 0)}/{len(models_used)}\n")
+        self.vote_text.insert(tk.END, f"最终结果: {'有人体' if result.get('has_person') else '无人体'}\n")
+        self.vote_text.insert(tk.END, f"加权置信度: {result.get('confidence', 0):.3f}\n\n")
+
+        # 各模型投票详情
+        self.vote_text.insert(tk.END, "【各模型投票详情】\n")
+        self.vote_text.insert(tk.END, f"{'模型':<15} {'检测结果':<10} {'置信度':<10} {'投票':<6}\n")
+        self.vote_text.insert(tk.END, "-" * 50 + "\n")
+
+        # Detect
+        detection_details = result.get("detection_details", [])
+        det_has = len(detection_details) > 0
+        det_conf = max([d.get("confidence", 0) for d in detection_details], default=0)
+        self.vote_text.insert(tk.END, f"{'Detect':<15} {'有人体' if det_has else '无人体':<10} {det_conf:<10.3f} {'+1' if det_has else ' 0':<6}\n")
+
+        # Pose
+        pose_analysis = result.get("pose_analysis", [])
+        visible_keypoints = result.get("visible_keypoints", 0)
+        pose_has = len(pose_analysis) > 0 and "站立/正常姿态" not in pose_analysis
+        pose_conf = visible_keypoints / 17 if visible_keypoints > 0 else 0
+        self.vote_text.insert(tk.END, f"{'Pose':<15} {'有人体' if pose_has else '无人体':<10} {pose_conf:<10.3f} {'+1' if pose_has else ' 0':<6}\n")
+
+        # Segment
+        segment_details = result.get("segment_details", [])
+        seg_has = len(segment_details) > 0
+        seg_conf = max([s.get("confidence", 0) for s in segment_details], default=0)
+        self.vote_text.insert(tk.END, f"{'Segment':<15} {'有人体' if seg_has else '无人体':<10} {seg_conf:<10.3f} {'+1' if seg_has else ' 0':<6}\n")
+
+        self.vote_text.insert(tk.END, "-" * 50 + "\n")
+        vote_count = sum([1 if det_has else 0, 1 if pose_has else 0, 1 if seg_has else 0])
+        self.vote_text.insert(tk.END, f"{'总计':<15} {'':10} {'':10} {vote_count}/3\n\n")
+
+        # 投票规则说明
+        self.vote_text.insert(tk.END, "【投票规则】\n")
+        self.vote_text.insert(tk.END, "- 至少 2 个模型检测到人体 → 最终结果为有人体\n")
+        self.vote_text.insert(tk.END, "- 加权置信度 = 各模型置信度的加权平均\n")
+        self.vote_text.insert(tk.END, "- 权重根据置信度动态调整\n")
+
+        self.vote_text.configure(state="disabled")
 
     def _refresh_image(self):
         """刷新当前图片显示"""
