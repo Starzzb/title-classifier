@@ -10,8 +10,8 @@ from ..utils.prompt_loader import get_prompt
 
 logger = logging.getLogger(__name__)
 
-# 每批处理的标题数量
-BATCH_SIZE = 10
+# 每批处理的标题数量（文本处理轻量，可以多放几条）
+BATCH_SIZE = 30
 # 最大并发批次数
 MAX_WORKERS = 3
 

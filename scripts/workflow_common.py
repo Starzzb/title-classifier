@@ -183,12 +183,19 @@ def step_confirm_all(csv_path: str, log_path: Path):
     return 0
 
 
-def step_rename(csv_path: str, log_path: Path, dry_run: bool = False):
+def step_rename(csv_path: str, log_path: Path, dry_run: bool = False,
+                use_rclone: bool = False, rclone_path: str = None, max_workers: int = None):
     """执行重命名"""
     mode = "模拟重命名" if dry_run else "执行重命名"
     cmd = [sys.executable, "-m", "title_classifier", "rename", "-c", csv_path]
     if dry_run:
         cmd.append("--dry-run")
+    if use_rclone:
+        cmd.append("--use-rclone")
+    if rclone_path:
+        cmd.extend(["--rclone-path", rclone_path])
+    if max_workers:
+        cmd.extend(["--max-workers", str(max_workers)])
     return run_cmd(cmd, mode, log_path)
 
 

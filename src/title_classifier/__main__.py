@@ -292,11 +292,26 @@ def cmd_vision(args):
 
 def cmd_rename(args):
     """重命名命令"""
-    renamer = Renamer(csv_path=args.csv)
+    # 读取配置
+    from .utils.config import load_config
+    config = load_config()
+    renamer_config = config.get("renamer", {})
+
+    use_rclone = getattr(args, 'use_rclone', False) or renamer_config.get("use_rclone", False)
+    rclone_path = getattr(args, 'rclone_path', None) or renamer_config.get("rclone_path", "rclone")
+    max_workers = getattr(args, 'max_workers', None) or renamer_config.get("max_workers", 5)
+
+    renamer = Renamer(
+        csv_path=args.csv,
+        use_rclone=use_rclone,
+        rclone_path=rclone_path,
+        max_workers=int(max_workers)
+    )
     stats = renamer.rename(dry_run=args.dry_run)
 
-    if "error" in stats:
-        print(f"[错误] {stats['error']}")
+    error_val = stats.get("error")
+    if error_val and isinstance(error_val, str):
+        print(f"[错误] {error_val}")
         return
 
     print(f"\n[统计]")
@@ -603,6 +618,9 @@ def main():
     rename_cmd = subparsers.add_parser("rename", help="执行重命名")
     rename_cmd.add_argument("-c", "--csv", default="data/output/title_review.csv", help="CSV文件路径")
     rename_cmd.add_argument("--dry-run", action="store_true", help="模拟运行")
+    rename_cmd.add_argument("--use-rclone", action="store_true", help="使用 rclone 重命名（适合云盘）")
+    rename_cmd.add_argument("--rclone-path", default=None, help="rclone 可执行文件路径")
+    rename_cmd.add_argument("--max-workers", type=int, default=None, help="并行重命名线程数")
     rename_cmd.set_defaults(func=cmd_rename)
 
     # gui 命令

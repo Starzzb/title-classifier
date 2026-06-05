@@ -30,6 +30,9 @@ def main():
     parser.add_argument("target_dir", help="目标视频目录")
     parser.add_argument("--dry-run", action="store_true", help="仅模拟重命名，不实际执行")
     parser.add_argument("--csv", help="指定 CSV 文件路径（默认自动查找）")
+    parser.add_argument("--use-rclone", action="store_true", help="使用 rclone 重命名（适合云盘）")
+    parser.add_argument("--rclone-path", default=None, help="rclone 可执行文件路径")
+    parser.add_argument("--max-workers", type=int, default=None, help="并行重命名线程数")
     args = parser.parse_args()
 
     target_dir = Path(args.target_dir).resolve()
@@ -58,7 +61,9 @@ def main():
     print(f"[日志] {log_path}")
 
     step_confirm_all(csv_path, log_path)
-    step_rename(csv_path, log_path, dry_run=args.dry_run)
+    step_rename(csv_path, log_path, dry_run=args.dry_run,
+                use_rclone=args.use_rclone, rclone_path=args.rclone_path,
+                max_workers=args.max_workers)
 
     print_summary(time.time() - start, log_path)
 

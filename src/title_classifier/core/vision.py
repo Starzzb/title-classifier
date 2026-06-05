@@ -796,6 +796,12 @@ class VisionProcessor:
         # 记录VLM响应（用于调试）
         logger.debug(f"VLM响应: {result[:500] if result else '空'}")
 
+        # 检查VLM调用是否失败
+        if not result or result.startswith("[ERROR]"):
+            error_msg = f"VLM调用失败: {result[:100] if result else '空响应'}"
+            logger.error(error_msg)
+            return {"error": error_msg}
+
         parsed = self._parse_vision_response(result)
 
         # 关键词为空时重试（截断/格式异常）
@@ -825,6 +831,12 @@ class VisionProcessor:
                     logger.info("关键词重试成功")
                     return parsed_retry
                 logger.warning("关键词重试后仍为空，使用首次结果")
+
+        # 最终检查：如果关键词仍为空，返回错误
+        if not parsed.get("keywords"):
+            error_msg = "VLM返回关键词为空（已重试）"
+            logger.error(error_msg)
+            return {"error": error_msg}
 
         return parsed
 

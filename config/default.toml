@@ -119,6 +119,11 @@ max_subtitle_chars = 100
 filter_invalid = true
 format_text = true
 
+[renamer]
+use_rclone = false
+rclone_path = "rclone"
+max_workers = 5
+
 [mux]
 enabled = false
 auto_mux = false
