@@ -25,6 +25,7 @@ class DebugWindow(tk.Toplevel):
         self.frame_data = []  # 检测帧数据列表
         self.vlm_frames = []  # VLM输入帧列表
         self.photo_images = []  # 防止GC回收
+        self.vlm_photo_images = []  # VLM缩略图独立引用
 
         self._load_data()
         self._build_ui()
@@ -53,6 +54,9 @@ class DebugWindow(tk.Toplevel):
         vlm_dir = self.debug_dir / "vlm_frames"
         if vlm_dir.exists():
             self.vlm_frames = sorted([str(f) for f in vlm_dir.glob("*.jpg")])
+
+        # 加载帧时间戳（用于显示）
+        self.frame_timestamps = self.summary.get("frame_timestamps", [])
 
         # 加载VLM prompt和response
         self.vlm_prompt = ""
@@ -214,6 +218,10 @@ class DebugWindow(tk.Toplevel):
             ttk.Label(self.vlm_frame_tab, text="无VLM帧数据").pack(pady=20)
             return
 
+        # 顶部说明
+        ttk.Label(self.vlm_frame_tab, text="点击缩略图可在左侧主画布中预览大图",
+                  font=("Microsoft YaHei", 9), foreground="#888888").pack(fill=tk.X, padx=5, pady=(5, 0))
+
         # 滚动区域
         canvas = tk.Canvas(self.vlm_frame_tab)
         scrollbar = ttk.Scrollbar(self.vlm_frame_tab, orient=tk.VERTICAL, command=canvas.yview)
@@ -226,6 +234,11 @@ class DebugWindow(tk.Toplevel):
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
+        # 鼠标滚轮滚动
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        canvas.bind_all("<MouseWheel>", _on_mousewheel, add="+")
+
         # 显示VLM帧缩略图
         cols = 3
         for i, frame_path in enumerate(self.vlm_frames):
@@ -234,15 +247,57 @@ class DebugWindow(tk.Toplevel):
                 img = Image.open(frame_path)
                 img.thumbnail((200, 150))
                 photo = ImageTk.PhotoImage(img)
-                self.photo_images.append(photo)
+                self.vlm_photo_images.append(photo)
 
-                label = ttk.Label(scroll_frame, image=photo)
-                label.grid(row=row * 2, column=col, padx=5, pady=2)
+                # 可点击的缩略图
+                frame_container = ttk.Frame(scroll_frame, relief="solid", borderwidth=1)
+                frame_container.grid(row=row * 2, column=col, padx=5, pady=2, sticky="nsew")
 
-                name_label = ttk.Label(scroll_frame, text=Path(frame_path).name, font=("Consolas", 8))
-                name_label.grid(row=row * 2 + 1, column=col, padx=5, pady=(0, 5))
+                img_label = ttk.Label(frame_container, image=photo, cursor="hand2")
+                img_label.pack(padx=2, pady=2)
+                img_label.bind("<Button-1>", lambda e, p=frame_path, idx=i: self._preview_vlm_frame(p, idx))
+
+                # 文件名 + 序号 + 时间戳
+                ts_str = ""
+                if i < len(self.frame_timestamps):
+                    ts_str = f" @{self.frame_timestamps[i]:.1f}s"
+                name_label = ttk.Label(frame_container,
+                                       text=f"#{i}{ts_str} {Path(frame_path).name}",
+                                       font=("Consolas", 8), cursor="hand2")
+                name_label.pack(padx=2, pady=(0, 2))
+                name_label.bind("<Button-1>", lambda e, p=frame_path, idx=i: self._preview_vlm_frame(p, idx))
+
             except Exception as e:
-                ttk.Label(scroll_frame, text=f"加载失败: {e}").grid(row=row * 2, column=col)
+                ttk.Label(scroll_frame, text=f"#{i} 加载失败: {e}").grid(row=row * 2, column=col)
+
+    def _preview_vlm_frame(self, frame_path: str, idx: int):
+        """在主画布中预览VLM帧"""
+        if not Path(frame_path).exists():
+            return
+
+        try:
+            img = Image.open(frame_path)
+            # 自适应缩放到主画布
+            canvas_w = self.canvas.winfo_width()
+            canvas_h = self.canvas.winfo_height()
+            if canvas_w > 1 and canvas_h > 1:
+                ratio = min(canvas_w / img.width, canvas_h / img.height, 1.0)
+                new_size = (int(img.width * ratio), int(img.height * ratio))
+                img = img.resize(new_size, Image.Resampling.LANCZOS)
+
+            photo = ImageTk.PhotoImage(img)
+            self.photo_images.clear()
+            self.photo_images.append(photo)
+
+            self.canvas.delete("all")
+            self.canvas.create_image(0, 0, anchor=tk.NW, image=photo)
+            self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+            # 更新标题
+            self.img_title.configure(text=f"VLM帧 #{idx}: {Path(frame_path).name}")
+        except Exception as e:
+            self.canvas.delete("all")
+            self.canvas.create_text(10, 10, anchor=tk.NW, text=f"图片加载失败: {e}", fill="red")
 
     def _display_first(self):
         """显示第一帧"""
@@ -469,6 +524,9 @@ class DebugWindow(tk.Toplevel):
             self.canvas.delete("all")
             self.canvas.create_image(0, 0, anchor=tk.NW, image=photo)
             self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+            # 恢复检测帧标题
+            self.img_title.configure(text="检测结果")
         except Exception as e:
             self.canvas.delete("all")
             self.canvas.create_text(10, 10, anchor=tk.NW, text=f"图片加载失败: {e}", fill="red")

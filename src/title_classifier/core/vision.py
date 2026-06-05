@@ -265,10 +265,6 @@ class VisionProcessor:
 
         logger.info(f"VLM结果: 描述='{result.get('description', '')[:50]}...', 关键词='{result.get('keywords', '')[:50]}...'")
 
-        # 保存调试数据 - VLM响应和汇总
-        if debug_subdir:
-            self._save_debug_summary(result, video_summary, debug_subdir)
-
         # 7. 保存分析结果
         # 计算选中帧的时间戳
         selected_timestamps = [
@@ -276,6 +272,11 @@ class VisionProcessor:
             for i in selected_indices
             if i < len(video_analysis["timeline"])
         ]
+
+        # 保存调试数据 - VLM响应和汇总
+        if debug_subdir:
+            self._save_debug_summary(result, video_summary, debug_subdir,
+                                     frame_timestamps=selected_timestamps)
 
         analysis_result = {
             "description": result.get("description", ""),
@@ -914,7 +915,8 @@ class VisionProcessor:
 
         logger.info(f"VLM调试数据已保存: {len(frames)}帧, prompt长度={len(prompt)}")
 
-    def _save_debug_summary(self, vlm_result: Dict, video_summary: Dict, debug_dir: Path):
+    def _save_debug_summary(self, vlm_result: Dict, video_summary: Dict, debug_dir: Path,
+                           frame_timestamps: List[float] = None):
         """保存调试汇总"""
         # 保存VLM响应
         response_file = debug_dir / "vlm_response.txt"
@@ -927,6 +929,8 @@ class VisionProcessor:
             "vlm_result": vlm_result,
             "video_summary": video_summary,
         }
+        if frame_timestamps:
+            summary["frame_timestamps"] = frame_timestamps
         summary_file = debug_dir / "summary.json"
         with open(summary_file, "w", encoding="utf-8") as f:
             json.dump(summary, f, ensure_ascii=False, indent=2, default=str)
