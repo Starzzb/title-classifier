@@ -153,9 +153,15 @@ class VisionProcessor:
             threshold = self.motion_threshold
         
         try:
-            # 1. 转灰度
-            gray_prev = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
-            gray_curr = cv2.cvtColor(curr_frame, cv2.COLOR_BGR2GRAY)
+            # 1. 转灰度（兼容已灰度的帧）
+            if len(prev_frame.shape) == 2:
+                gray_prev = prev_frame
+            else:
+                gray_prev = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+            if len(curr_frame.shape) == 2:
+                gray_curr = curr_frame
+            else:
+                gray_curr = cv2.cvtColor(curr_frame, cv2.COLOR_BGR2GRAY)
             
             # 2. 高斯模糊降噪（减少压缩伪影影响）
             gray_prev = cv2.GaussianBlur(gray_prev, (21, 21), 0)
@@ -400,7 +406,10 @@ class VisionProcessor:
                 timeline.append(timeline_entry)
                 
                 # 更新上一帧灰度图（用于下一次运动检测）
-                prev_frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                if len(frame.shape) == 2:
+                    prev_frame_gray = frame
+                else:
+                    prev_frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 continue
 
             # 有运动或首次帧，执行YOLO全面分析
@@ -480,7 +489,10 @@ class VisionProcessor:
                 # 更新状态
                 prev_result = timeline_entry
                 last_forced_timestamp = ts
-                prev_frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                if len(frame.shape) == 2:
+                    prev_frame_gray = frame
+                else:
+                    prev_frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
             if (i + 1) % 10 == 0:
                 logger.info(f"已分析 {i + 1}/{len(timestamps)} 帧")
