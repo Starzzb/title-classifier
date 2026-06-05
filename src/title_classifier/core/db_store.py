@@ -144,6 +144,10 @@ class MediaDB:
         if not original_title:
             return None
 
+        original_title = original_title.strip()
+        if not original_title:
+            return None
+
         # Level 1: 标题精确匹配
         candidates = self.conn.execute(
             "SELECT * FROM media_files WHERE original_title=?", (original_title,)
