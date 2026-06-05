@@ -134,8 +134,8 @@ class YOLODetector(BaseDetector):
         logger.info(f"目标目录: {openvino_path}")
         
         try:
-            # 加载 PyTorch 模型
-            model = YOLO(str(pt_path))
+            # 加载 PyTorch 模型（必须指定 task，否则 pose/segment 模型导出时会丢失关键头）
+            model = YOLO(str(pt_path), task=model_type)
             
             # 导出为 OpenVINO 格式 (FP16)
             export_dir = model.export(format="openvino", half=True)
@@ -185,8 +185,9 @@ class YOLODetector(BaseDetector):
                             xml_files = list(openvino_path.glob("*.xml"))
                             if xml_files:
                                 # ultralytics 需要加载目录而不是单个 .xml 文件
+                                # 必须指定 task，否则 pose/segment 模型会被当作 detect 加载
                                 logger.info(f"加载 OpenVINO {model_type} 模型: {openvino_path}")
-                                model = YOLO(str(openvino_path))
+                                model = YOLO(str(openvino_path), task=model_type)
                                 backend_used = "openvino"
                             else:
                                 raise FileNotFoundError(f"OpenVINO 模型目录中未找到 .xml 文件: {openvino_path}")
@@ -198,7 +199,7 @@ class YOLODetector(BaseDetector):
                             ov_path = self._export_to_openvino(model_type, pt_path)
                             xml_files = list(ov_path.glob("*.xml"))
                             if xml_files:
-                                model = YOLO(str(ov_path))
+                                model = YOLO(str(ov_path), task=model_type)
                             else:
                                 raise FileNotFoundError(f"导出后未找到 OpenVINO 模型文件: {ov_path}")
                             backend_used = "openvino"
