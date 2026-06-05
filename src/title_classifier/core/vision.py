@@ -48,7 +48,7 @@ class VisionProcessor:
         device: str = "cpu",
         motion_detection: bool = True,
         motion_threshold: float = 5.0,
-        motion_min_interval: float = 2.0,
+        motion_min_interval: float = 5.0,
         backend: str = "auto",
     ):
         self.provider = provider
