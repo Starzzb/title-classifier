@@ -45,9 +45,20 @@ class MediaDB:
     # ===== 基础 CRUD =====
 
     def insert_media(self, data: dict) -> int:
-        """插入新记录，返回 media_id"""
-        existing = self.find_by_path(data.get("original_path", ""))
+        """插入新记录，返回 media_id。如果匹配到已有记录则更新路径并返回旧 id"""
+        existing = self.find_match(
+            original_title=data.get("original_title", ""),
+            file_size=data.get("file_size"),
+            duration=data.get("duration"),
+        )
         if existing:
+            # 匹配到已有记录，更新路径
+            new_path = data.get("original_path", "")
+            if new_path and new_path != existing.get("original_path"):
+                self.update_media(existing["id"], "original_path", new_path, "match_update")
+            current_path = data.get("current_path", new_path)
+            if current_path and current_path != existing.get("current_path"):
+                self.update_media(existing["id"], "current_path", current_path, "match_update")
             return existing["id"]
 
         cursor = self.conn.execute("""
@@ -114,6 +125,60 @@ class MediaDB:
             "SELECT * FROM media_files WHERE current_path=?", (path,)
         ).fetchone()
         return dict(row) if row else None
+
+    def find_match(self, original_title: str, file_size: int = None, duration: float = None) -> Optional[dict]:
+        """
+        按原始文件名匹配视频（抛弃路径匹配）
+
+        Level 1: original_title 精确匹配 + file_size ±1% 区间验证
+        Level 2: file_size ±1% + duration ±1s 区间匹配（仅 Level 1 未命中时）
+
+        Args:
+            original_title: 原始文件名（如 "TG@COSSSDZH (1).mp4"）
+            file_size: 文件大小（字节），可选
+            duration: 视频时长（秒），可选
+
+        Returns:
+            匹配到的记录，或 None
+        """
+        if not original_title:
+            return None
+
+        # Level 1: 标题精确匹配
+        candidates = self.conn.execute(
+            "SELECT * FROM media_files WHERE original_title=?", (original_title,)
+        ).fetchall()
+
+        if candidates:
+            if file_size:
+                # 有大小信息，做 ±1% 区间验证
+                for c in candidates:
+                    db_size = c["file_size"]
+                    if db_size and db_size > 0:
+                        diff_ratio = abs(db_size - file_size) / db_size
+                        if diff_ratio <= 0.01:
+                            return dict(c)
+                # 所有候选都不在 ±1% 范围内，跳过
+            else:
+                # 无大小信息，标题匹配即命中
+                return dict(candidates[0])
+
+        # Level 2: file_size + duration 区间匹配
+        if file_size and duration:
+            size_min = int(file_size * 0.99)
+            size_max = int(file_size * 1.01)
+            dur_min = duration - 1.0
+            dur_max = duration + 1.0
+
+            row = self.conn.execute(
+                "SELECT * FROM media_files WHERE file_size BETWEEN ? AND ? AND duration BETWEEN ? AND ?",
+                (size_min, size_max, dur_min, dur_max)
+            ).fetchone()
+
+            if row:
+                return dict(row)
+
+        return None
 
     def list_all(self, limit: int = 100, offset: int = 0) -> List[dict]:
         """列出所有记录"""
@@ -364,7 +429,19 @@ class MediaDB:
                     stats["skipped"] += 1
                     continue
 
-                existing = self.find_by_path(original_path)
+                # 尝试从CSV获取文件大小（如果有列）
+                file_size = None
+                fs_str = row.get("file_size", "").strip()
+                if fs_str:
+                    try:
+                        file_size = int(fs_str)
+                    except ValueError:
+                        pass
+
+                existing = self.find_match(
+                    original_title=row.get("original_title", ""),
+                    file_size=file_size,
+                )
 
                 data = {
                     "original_title": row.get("original_title", ""),

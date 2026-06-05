@@ -1161,9 +1161,23 @@ class TitleClassifierApp(tk.Tk):
                     original_path = row.get("original_path", "")
                     if not original_path:
                         continue
-                    existing = self.db.find_by_path(original_path)
+
+                    # 尝试获取 file_size
+                    file_size = None
+                    fs_str = row.get("file_size", "").strip()
+                    if fs_str:
+                        try:
+                            file_size = int(fs_str)
+                        except ValueError:
+                            pass
+
+                    existing = self.db.find_match(
+                        original_title=row.get("original_title", ""),
+                        file_size=file_size,
+                    )
                     if existing:
                         continue
+
                     data = {
                         "original_title": row.get("original_title", ""),
                         "original_path": original_path,
@@ -1177,6 +1191,7 @@ class TitleClassifierApp(tk.Tk):
                         "vision_keywords": row.get("vision_keywords", ""),
                         "human_detected": row.get("human_detected", "").lower() == "true",
                         "detection_method": row.get("detection_method", ""),
+                        "file_size": file_size,
                     }
                     self.db.insert_media(data)
             print("[数据库] 扫描结果已同步")

@@ -186,12 +186,7 @@ class Scanner:
         if not original_path:
             return
 
-        # 检查是否已存在
-        existing = db.find_by_path(original_path)
-        if existing:
-            return
-
-        # 插入新记录
+        # 插入新记录（insert_media 内部会用 find_match 去重）
         data = {
             "original_title": row.get("original_title", ""),
             "original_path": original_path,
@@ -206,14 +201,21 @@ class Scanner:
             "human_detected": row.get("human_detected", "").lower() == "true",
             "detection_method": row.get("detection_method", ""),
         }
-        db.insert_media(data)
+
+        # 传递 file_size（如果有的话）
+        file_size = row.get("file_size")
+        if file_size:
+            try:
+                data["file_size"] = int(file_size)
+            except (ValueError, TypeError):
+                pass
+
+        media_id = db.insert_media(data)
 
         # 导入标签
         keywords = row.get("vision_keywords", "")
-        if keywords:
-            media = db.find_by_path(original_path)
-            if media:
-                db.add_tags_from_keywords(media["id"], keywords, "scanner")
+        if keywords and media_id:
+            db.add_tags_from_keywords(media_id, keywords, "scanner")
 
     def _scan_directory(self, directory: Path, exclude_dirs: List[str]) -> List[Path]:
         """递归扫描目录"""
@@ -254,6 +256,12 @@ class Scanner:
         # 默认填入干净原标题（去除扩展名）作为final_name
         final_name = clean_name
 
+        # 获取文件大小（快速，毫秒级）
+        try:
+            file_size = file_path.stat().st_size
+        except OSError:
+            file_size = None
+
         return {
             "original_title": clean_title,
             "original_path": str(file_path),
@@ -277,6 +285,7 @@ class Scanner:
             "clip_detail": "",
             "vision_source": "",
             "vision_failed": "false",
+            "file_size": file_size,
         }
 
     def _save_csv(self, rows: List[Dict], output_file: str, append: bool = False) -> None:

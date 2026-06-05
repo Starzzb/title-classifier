@@ -1433,7 +1433,7 @@ class VisionProcessor:
         if saved > 0:
             logger.info(f"保存VLM帧: {saved}张到 {cover_dir}")
 
-    def _sync_to_db(self, media_id: int, result: dict):
+    def _sync_to_db(self, media_id: int, result: dict, video_path: str = None, duration: float = None):
         """同步识别结果到数据库"""
         if not self.db_store:
             return
@@ -1458,6 +1458,17 @@ class VisionProcessor:
             db.update_media(media_id, "human_detected", vs.get("has_person", False), "vision")
             if vs.get("has_person"):
                 db.update_media(media_id, "detection_method", "yolo", "vision")
+
+        # 补充文件元数据
+        if video_path:
+            try:
+                import os
+                file_size = os.path.getsize(video_path)
+                db.update_media(media_id, "file_size", file_size, "vision")
+            except Exception:
+                pass
+        if duration:
+            db.update_media(media_id, "duration", duration, "vision")
 
         db.update_media(media_id, "needs_vision", 0, "vision")
 
