@@ -167,7 +167,7 @@ def extract_frame(
         cmd.extend([
             "-ss", safe_timestamp_str,
             "-i", video_path,
-            "-vf", f"scale='if(gt(iw,{max_size}),{max_size},-2)':'if(gt(ih,{max_size}),{max_size},-2)'",
+            "-vf", f"scale='if(gt(iw,ih),{max_size},-2)':'if(gt(ih,iw),{max_size},-2)'",
             "-frames:v", "1",
             "-q:v", "2",
             output_path,
@@ -233,7 +233,7 @@ def extract_frames_batch(
     
     cmd.extend([
         "-i", video_path,
-        "-vf", f"select='{select_expr}',scale='if(gt(iw,{max_size}),{max_size},-2)':'if(gt(ih,{max_size}),{max_size},-2)'",
+        "-vf", f"select='{select_expr}',scale='if(gt(iw,ih),{max_size},-2)':'if(gt(ih,iw),{max_size},-2)'",
         "-vsync", "vfr",
         "-q:v", "2",
         str(output_path / f"{prefix}_%04d.jpg"),

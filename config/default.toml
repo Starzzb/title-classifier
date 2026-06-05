@@ -45,7 +45,7 @@ batch_extract = true         # 批量提取帧（减少 ffmpeg 启动次数）
 
 [yolo]
 model_type = "detect"
-confidence = 0.5
+confidence = 0.4
 backend = "auto"  # auto / openvino / pytorch
 
 [yolo.openvino]

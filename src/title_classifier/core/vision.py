@@ -35,7 +35,7 @@ class VisionProcessor:
         use_yolo: bool = False,
         yolo_model: str = "pose",
         yolo_models: List[str] = None,
-        yolo_conf: float = 0.5,
+        yolo_conf: float = 0.4,
         use_clip: bool = False,
         clip_threshold: float = 0.25,
         max_image_size: int = 640,
