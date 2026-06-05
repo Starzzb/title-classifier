@@ -55,9 +55,6 @@ class DebugWindow(tk.Toplevel):
         if vlm_dir.exists():
             self.vlm_frames = sorted([str(f) for f in vlm_dir.glob("*.jpg")])
 
-        # 加载帧时间戳（用于显示）
-        self.frame_timestamps = self.summary.get("frame_timestamps", [])
-
         # 加载VLM prompt和response
         self.vlm_prompt = ""
         self.vlm_response = ""
@@ -74,6 +71,9 @@ class DebugWindow(tk.Toplevel):
         if summary_file.exists():
             with open(summary_file, "r", encoding="utf-8") as f:
                 self.summary = json.load(f)
+
+        # 帧时间戳（从summary中获取）
+        self.frame_timestamps = self.summary.get("frame_timestamps", [])
 
     def _build_ui(self):
         """构建UI"""
