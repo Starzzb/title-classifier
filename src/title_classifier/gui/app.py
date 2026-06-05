@@ -1944,9 +1944,17 @@ class TitleClassifierApp(tk.Tk):
         if vlm_frames:
             cmd.extend(["--vlm-frames", vlm_frames])
 
-        # YOLO置信度
+        # YOLO置信度（校验范围）
         yolo_conf = self.s1c_yolo_conf_var.get()
         if yolo_conf and yolo_conf != "0.4":
+            try:
+                conf_val = float(yolo_conf)
+                if not (0.1 <= conf_val <= 0.9):
+                    messagebox.showwarning("警告", "YOLO置信度应在 0.1-0.9 之间")
+                    return
+            except ValueError:
+                messagebox.showwarning("警告", "YOLO置信度必须是数字")
+                return
             cmd.extend(["--yolo-conf", yolo_conf])
 
         if self.s1c_all_var.get():
@@ -2024,9 +2032,17 @@ class TitleClassifierApp(tk.Tk):
         if vlm_frames:
             cmd.extend(["--vlm-frames", vlm_frames])
 
-        # YOLO置信度
+        # YOLO置信度（校验范围）
         yolo_conf = self.s1c_yolo_conf_var.get()
         if yolo_conf and yolo_conf != "0.4":
+            try:
+                conf_val = float(yolo_conf)
+                if not (0.1 <= conf_val <= 0.9):
+                    messagebox.showwarning("警告", "YOLO置信度应在 0.1-0.9 之间")
+                    return
+            except ValueError:
+                messagebox.showwarning("警告", "YOLO置信度必须是数字")
+                return
             cmd.extend(["--yolo-conf", yolo_conf])
 
         # 重试失败行

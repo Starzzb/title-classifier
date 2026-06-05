@@ -213,7 +213,7 @@ class YOLODetector(BaseDetector):
                         logger.error(f"YOLO 模型文件不存在: {pt_path}")
                         continue
                     logger.info(f"加载 PyTorch {model_type} 模型: {pt_path} (设备: {self.device})")
-                    model = YOLO(str(pt_path))
+                    model = YOLO(str(pt_path), task=model_type)
                     if self.device == "cuda":
                         model.to("cuda")
                     backend_used = "pytorch"
@@ -716,7 +716,7 @@ def analyze_pose_for_vlm(keypoints: dict) -> list:
         return ["站立/正常姿态"]
 
     torso = hip_y - shoulder_y
-    if torso <= 0:
+    if torso <= 0 or torso < 10:  # 最小10px躯干，防止误判
         return ["站立/正常姿态"]
 
     # --- 1. 弯腰/前倾 ---

@@ -729,7 +729,7 @@ class VisionProcessor:
             # 姿态分布（结构化描述）
             pose_dist = video_summary.get("pose_distribution", {})
             if pose_dist:
-                total_person = len(frames_with_person)
+                total_person = int(video_summary.get("person_ratio", 0) * video_summary.get("total_frames", 1))
                 main_pose = video_summary.get("main_pose", "未知")
                 main_count = pose_dist.get(main_pose, 0)
                 context_lines.append(f"- 主要姿态: {main_pose} (占{main_count}/{total_person}帧)")
