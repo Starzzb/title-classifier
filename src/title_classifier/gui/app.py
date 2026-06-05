@@ -200,6 +200,10 @@ class TitleClassifierApp(tk.Tk):
         self.stop_btn = ttk.Button(log_toolbar, text="停止", command=self._stop_process, state="disabled")
         self.stop_btn.pack(side=tk.RIGHT, padx=4)
 
+        # 进度状态标签
+        self.progress_label = ttk.Label(log_toolbar, text="", foreground="#888888")
+        self.progress_label.pack(side=tk.LEFT, padx=4)
+
         self.log_text = scrolledtext.ScrolledText(
             log_frame, height=12, state="disabled", font=("Consolas", 9), wrap=tk.WORD
         )
@@ -1073,6 +1077,10 @@ class TitleClassifierApp(tk.Tk):
 
         self.running = True
         self.stop_btn.configure(state="normal")
+        self.progress_label.configure(text="")
+
+        import re
+        progress_pattern = re.compile(r"\[(\d+)/(\d+)\]")
 
         def run():
             try:
@@ -1086,13 +1094,21 @@ class TitleClassifierApp(tk.Tk):
                 )
                 for line in self.process.stdout:
                     print(line.rstrip())
+                    # 解析进度信息 [cur/total]
+                    match = progress_pattern.search(line)
+                    if match:
+                        cur, total = match.group(1), match.group(2)
+                        self.progress_label.configure(text=f"进度: {cur}/{total}")
                 self.process.wait()
                 if self.process.returncode == 0:
                     print("\n[完成] 命令执行成功")
+                    self.progress_label.configure(text="完成")
                 else:
                     print(f"\n[错误] 命令执行失败，返回码: {self.process.returncode}")
+                    self.progress_label.configure(text="失败")
             except Exception as e:
                 print(f"\n[错误] {e}")
+                self.progress_label.configure(text="错误")
             finally:
                 self.running = False
                 self.stop_btn.configure(state="disabled")
@@ -1109,6 +1125,7 @@ class TitleClassifierApp(tk.Tk):
             self.process = None
             self.running = False
             self.stop_btn.configure(state="disabled")
+            self.progress_label.configure(text="已停止")
             print("[停止] 命令已终止")
 
     def _clear_log(self):
@@ -1116,6 +1133,7 @@ class TitleClassifierApp(tk.Tk):
         self.log_text.configure(state="normal")
         self.log_text.delete(1.0, tk.END)
         self.log_text.configure(state="disabled")
+        self.progress_label.configure(text="")
 
     def _run_scan(self):
         """运行扫描"""
