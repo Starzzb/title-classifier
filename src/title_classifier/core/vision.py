@@ -520,18 +520,24 @@ class VisionProcessor:
                 "yolo_inference_count": yolo_inference_count,
             }
 
-        # 姿态变化时间线
+        # 姿态变化时间线（带时序平滑：持续>=2帧才算真正变化）
         pose_changes = []
         prev_pose = None
+        pose_persist_count = 0
+        PERSIST_THRESHOLD = 2
         for t in frames_with_person:
             current_pose = tuple(t.get("pose_analysis", []))
-            if prev_pose and current_pose != prev_pose:
-                pose_changes.append({
-                    "timestamp": t["timestamp"],
-                    "from": list(prev_pose),
-                    "to": list(current_pose),
-                })
-            prev_pose = current_pose
+            if current_pose == prev_pose:
+                pose_persist_count += 1
+            else:
+                if pose_persist_count >= PERSIST_THRESHOLD and prev_pose is not None:
+                    pose_changes.append({
+                        "timestamp": t["timestamp"],
+                        "from": list(prev_pose),
+                        "to": list(current_pose),
+                    })
+                pose_persist_count = 1
+                prev_pose = current_pose
 
         # 人体出现时间段
         person_appearances = []
@@ -720,20 +726,27 @@ class VisionProcessor:
                 context_lines.append(f"- 使用模型: {', '.join(models_used)}")
                 context_lines.append(f"- 平均投票数: {video_summary.get('avg_vote', 0):.1f}/{len(models_used)}")
 
-            # 姿态分布
+            # 姿态分布（结构化描述）
             pose_dist = video_summary.get("pose_distribution", {})
             if pose_dist:
-                pose_str = ", ".join([f"{k}({v}次)" for k, v in sorted(pose_dist.items(), key=lambda x: -x[1])])
-                context_lines.append(f"- 姿态分布: {pose_str}")
+                total_person = len(frames_with_person)
+                main_pose = video_summary.get("main_pose", "未知")
+                main_count = pose_dist.get(main_pose, 0)
+                context_lines.append(f"- 主要姿态: {main_pose} (占{main_count}/{total_person}帧)")
+                # 其他姿态
+                other_poses = {k: v for k, v in pose_dist.items() if k != main_pose}
+                if other_poses:
+                    other_str = ", ".join([f"{k}({v}次)" for k, v in sorted(other_poses.items(), key=lambda x: -x[1])])
+                    context_lines.append(f"- 其他姿态: {other_str}")
 
-            # 姿态变化
+            # 姿态变化（时间线描述）
             pose_changes = video_summary.get("pose_changes", [])
             if pose_changes:
-                context_lines.append(f"- 姿态变化次数: {len(pose_changes)}")
-                for change in pose_changes[:5]:  # 最多显示5次变化
+                context_lines.append(f"- 姿态变化: 共{len(pose_changes)}次")
+                for change in pose_changes[:5]:
                     from_pose = ", ".join(change["from"]) if change["from"] else "无"
                     to_pose = ", ".join(change["to"]) if change["to"] else "无"
-                    context_lines.append(f"  * {change['timestamp']:.1f}s: {from_pose} -> {to_pose}")
+                    context_lines.append(f"  * {change['timestamp']:.1f}s时从[{from_pose}]变为[{to_pose}]")
 
             # 人体出现时间段
             appearances = video_summary.get("person_appearances", [])
@@ -969,10 +982,25 @@ class VisionProcessor:
         if self.use_clip and self.clip_classifier:
             clip_result = self.clip_classifier.classify(compressed_path, threshold=self.clip_threshold)
             if clip_result["avg_confidence"] >= self.clip_threshold:
+                # 构建CLIP详细置信度JSON
+                import json as _json
+                clip_detail = {}
+                for dim in ["clothing", "action", "hairstyle"]:
+                    dim_results = clip_result.get("all_results", {}).get(dim, [])
+                    clip_detail[dim] = [
+                        {"label": r.get("label", ""), "label_cn": r.get("label_cn", ""), "confidence": round(r.get("confidence", 0), 4)}
+                        for r in dim_results
+                    ]
                 return {
                     "description": f"[CLIP] {clip_result['tags']}",
                     "keywords": clip_result["tags"],
                     "source": "clip_only",
+                    "clip_clothing": clip_result.get("clothing", {}).get("label_cn", ""),
+                    "clip_action": clip_result.get("action", {}).get("label_cn", ""),
+                    "clip_hairstyle": clip_result.get("hairstyle", {}).get("label_cn", ""),
+                    "clip_confidence": round(clip_result.get("avg_confidence", 0), 4),
+                    "clip_tags_json": _json.dumps(clip_result.get("tags_json", {}), ensure_ascii=False),
+                    "clip_detail": _json.dumps(clip_detail, ensure_ascii=False),
                 }
 
         image_b64 = image_to_base64(compressed_path, max_size=self.max_image_size)

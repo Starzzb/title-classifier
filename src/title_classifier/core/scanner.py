@@ -274,6 +274,7 @@ class Scanner:
             "clip_tags": "",
             "clip_tags_json": "",
             "clip_confidence": "",
+            "clip_detail": "",
             "vision_source": "",
             "vision_failed": "false",
         }
@@ -290,7 +291,7 @@ class Scanner:
             "vision_failed",
             "human_detected", "detection_confidence", "detection_timestamp", "detection_method",
             "clip_clothing", "clip_action", "clip_hairstyle",
-            "clip_tags", "clip_tags_json", "clip_confidence", "vision_source",
+            "clip_tags", "clip_tags_json", "clip_confidence", "clip_detail", "vision_source",
         ]
 
         if append:

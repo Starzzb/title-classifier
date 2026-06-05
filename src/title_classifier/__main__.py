@@ -140,7 +140,9 @@ def cmd_vision(args):
         return
 
     # 确保字段存在
-    for col in ["vision_description", "vision_keywords", "final_name", "srt_path", "vision_failed"]:
+    for col in ["vision_description", "vision_keywords", "final_name", "srt_path", "vision_failed",
+                 "clip_clothing", "clip_action", "clip_hairstyle", "clip_tags", "clip_tags_json",
+                 "clip_confidence", "clip_detail"]:
         if col not in fieldnames:
             fieldnames.append(col)
 
@@ -245,6 +247,16 @@ def cmd_vision(args):
                 if video_summary:
                     rows[row_idx]["human_detected"] = "true" if video_summary.get("has_person") else "false"
                     rows[row_idx]["detection_method"] = "yolo"
+
+                # 保存CLIP详细置信度
+                if result.get("clip_detail"):
+                    rows[row_idx]["clip_clothing"] = result.get("clip_clothing", "")
+                    rows[row_idx]["clip_action"] = result.get("clip_action", "")
+                    rows[row_idx]["clip_hairstyle"] = result.get("clip_hairstyle", "")
+                    rows[row_idx]["clip_tags"] = result.get("keywords", "")
+                    rows[row_idx]["clip_tags_json"] = result.get("clip_tags_json", "")
+                    rows[row_idx]["clip_confidence"] = str(result.get("clip_confidence", ""))
+                    rows[row_idx]["clip_detail"] = result.get("clip_detail", "")
 
                 elapsed = time.time() - start_time
                 counter["success"] += 1

@@ -683,6 +683,7 @@ class YOLODetector(BaseDetector):
 def analyze_pose_for_vlm(keypoints: dict) -> list:
     """
     分析姿态，返回姿态描述列表（用于VLM上下文）
+    使用人体自身尺寸（躯干长度）做归一化，兼容不同分辨率和镜头距离。
 
     Args:
         keypoints: 关键点字典 {name: {x, y, conf}}
@@ -692,31 +693,90 @@ def analyze_pose_for_vlm(keypoints: dict) -> list:
     """
     analysis = []
 
-    if "left_shoulder" in keypoints and "left_hip" in keypoints:
-        shoulder_y = keypoints["left_shoulder"]["y"]
-        hip_y = keypoints["left_hip"]["y"]
-        if shoulder_y > hip_y:
-            analysis.append("弯腰/前倾")
+    # 计算人体参考尺度：躯干长度 = shoulder_y - hip_y（取双侧平均）
+    def _avg_y(name_a, name_b):
+        a = keypoints.get(name_a)
+        b = keypoints.get(name_b)
+        if a and b:
+            return (a["y"] + b["y"]) / 2
+        return a["y"] if a else (b["y"] if b else None)
 
-    if "left_knee" in keypoints and "left_hip" in keypoints:
-        knee_y = keypoints["left_knee"]["y"]
-        hip_y = keypoints["left_hip"]["y"]
-        if knee_y < hip_y + 50:
-            analysis.append("跪姿/蹲姿")
+    def _avg_x(name_a, name_b):
+        a = keypoints.get(name_a)
+        b = keypoints.get(name_b)
+        if a and b:
+            return (a["x"] + b["x"]) / 2
+        return a["x"] if a else (b["x"] if b else None)
 
-    if "left_ankle" in keypoints and "left_knee" in keypoints:
-        ankle_y = keypoints["left_ankle"]["y"]
-        knee_y = keypoints["left_knee"]["y"]
-        if abs(ankle_y - knee_y) < 30:
+    shoulder_y = _avg_y("left_shoulder", "right_shoulder")
+    hip_y = _avg_y("left_hip", "right_hip")
+
+    if shoulder_y is None or hip_y is None:
+        return ["站立/正常姿态"]
+
+    torso = hip_y - shoulder_y
+    if torso <= 0:
+        return ["站立/正常姿态"]
+
+    # --- 1. 弯腰/前倾 ---
+    # 肩膀中点接近或超过髋部中点
+    if shoulder_y > hip_y - torso * 0.2:
+        analysis.append("弯腰/前倾")
+
+    # --- 2. 跪姿/蹲姿 ---
+    # 膝盖接近髋部高度
+    knee_y = _avg_y("left_knee", "right_knee")
+    if knee_y is not None and knee_y < hip_y + torso * 0.5:
+        analysis.append("跪姿/蹲姿")
+
+    # --- 3. 坐姿 ---
+    # 膝盖与脚踝接近同一水平线
+    ankle_y = _avg_y("left_ankle", "right_ankle")
+    if knee_y is not None and ankle_y is not None:
+        if abs(ankle_y - knee_y) < torso * 0.3:
             analysis.append("坐姿")
 
-    if "left_ear" in keypoints and "right_ear" in keypoints:
-        left_x = keypoints["left_ear"]["x"]
-        right_x = keypoints["right_ear"]["x"]
-        if left_x > right_x + 20:
+    # --- 4. 朝向 ---
+    le = keypoints.get("left_ear")
+    re = keypoints.get("right_ear")
+    if le and re:
+        dx = le["x"] - re["x"]
+        if dx > 10:
             analysis.append("右侧朝向")
-        elif right_x > left_x + 20:
+        elif dx < -10:
             analysis.append("左侧朝向")
+
+    # --- 5. 手臂抬起 ---
+    # 手腕高于肩膀
+    wrist_y = _avg_y("left_wrist", "right_wrist")
+    if wrist_y is not None and shoulder_y is not None:
+        if wrist_y < shoulder_y:
+            analysis.append("手臂抬起")
+
+    # --- 6. 躺卧 ---
+    # 关键点水平分布，垂直范围很小
+    if torso > 0:
+        all_y = [kp["y"] for kp in keypoints.values() if "y" in kp]
+        all_x = [kp["x"] for kp in keypoints.values() if "x" in kp]
+        if len(all_y) >= 6:
+            vertical_range = max(all_y) - min(all_y)
+            horizontal_range = max(all_x) - min(all_x)
+            if vertical_range < torso * 0.5 and horizontal_range > vertical_range * 2:
+                analysis.append("躺卧")
+
+    # --- 7. 双腿张开 ---
+    # 左右脚踝x距离大于躯干长度
+    la = keypoints.get("left_ankle")
+    ra = keypoints.get("right_ankle")
+    if la and ra:
+        ankle_x_dist = abs(la["x"] - ra["x"])
+        if ankle_x_dist > torso * 1.2:
+            analysis.append("双腿张开")
+
+    # --- 8. 弓背/驼背 ---
+    # 肩膀明显低于髋部（比弯腰更严重）
+    if shoulder_y > hip_y + torso * 0.3:
+        analysis.append("弓背/驼背")
 
     if not analysis:
         analysis.append("站立/正常姿态")
