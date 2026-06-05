@@ -301,6 +301,7 @@ class Scanner:
             "human_detected", "detection_confidence", "detection_timestamp", "detection_method",
             "clip_clothing", "clip_action", "clip_hairstyle",
             "clip_tags", "clip_tags_json", "clip_confidence", "clip_detail", "vision_source",
+            "file_size",
         ]
 
         if append:
