@@ -1162,7 +1162,7 @@ class TitleClassifierApp(tk.Tk):
                     if not original_path:
                         continue
 
-                    # 尝试获取 file_size
+                    # 尝试获取元数据
                     file_size = None
                     fs_str = row.get("file_size", "").strip()
                     if fs_str:
@@ -1171,9 +1171,20 @@ class TitleClassifierApp(tk.Tk):
                         except ValueError:
                             pass
 
+                    duration = None
+                    dur_str = row.get("duration", "").strip()
+                    if dur_str:
+                        try:
+                            duration = float(dur_str)
+                        except ValueError:
+                            pass
+
+                    resolution = row.get("resolution", "").strip()
+
                     existing = self.db.find_match(
                         original_title=row.get("original_title", ""),
                         file_size=file_size,
+                        duration=duration,
                     )
                     if existing:
                         continue
@@ -1192,6 +1203,8 @@ class TitleClassifierApp(tk.Tk):
                         "human_detected": row.get("human_detected", "").lower() == "true",
                         "detection_method": row.get("detection_method", ""),
                         "file_size": file_size,
+                        "duration": duration,
+                        "resolution": resolution,
                     }
                     self.db.insert_media(data)
             print("[数据库] 扫描结果已同步")

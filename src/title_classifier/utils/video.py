@@ -98,6 +98,73 @@ def get_video_duration(video_path: str) -> float:
     return 0.0
 
 
+def get_video_info(video_path: str) -> dict:
+    """
+    一次性获取视频元数据（时长 + 分辨率）
+
+    Returns:
+        {"duration": float, "resolution": str, "width": int, "height": int}
+    """
+    info = {"duration": 0.0, "resolution": "", "width": 0, "height": 0}
+
+    # 方式1: ffprobe 一次性获取
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error",
+             "-show_entries", "format=duration:stream=width,height,codec_type",
+             "-of", "json", video_path],
+            capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace",
+        )
+        if result.returncode == 0:
+            import json
+            data = json.loads(result.stdout)
+
+            # 时长
+            fmt = data.get("format", {})
+            dur_str = fmt.get("duration", "")
+            if dur_str:
+                info["duration"] = float(dur_str)
+
+            # 分辨率（取第一个视频流）
+            for stream in data.get("streams", []):
+                if stream.get("codec_type") == "video":
+                    w = stream.get("width", 0)
+                    h = stream.get("height", 0)
+                    if w and h:
+                        info["width"] = w
+                        info["height"] = h
+                        info["resolution"] = f"{w}x{h}"
+                    break
+
+            return info
+    except subprocess.TimeoutExpired:
+        logger.warning(f"ffprobe超时: {Path(video_path).name}")
+    except Exception as e:
+        logger.warning(f"ffprobe失败: {e}")
+
+    # 方式2: cv2 备用
+    try:
+        import cv2
+        cap = cv2.VideoCapture(video_path)
+        if cap.isOpened():
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+            w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            cap.release()
+
+            if fps > 0 and frame_count > 0:
+                info["duration"] = frame_count / fps
+            if w and h:
+                info["width"] = w
+                info["height"] = h
+                info["resolution"] = f"{w}x{h}"
+    except Exception as e:
+        logger.warning(f"cv2获取信息失败: {e}")
+
+    return info
+
+
 def safe_timestamp(timestamp_seconds: float, duration: float, margin: float = 2.0) -> float:
     """安全的时间戳：确保不超过视频时长"""
     if duration <= 0:

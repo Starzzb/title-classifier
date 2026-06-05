@@ -202,13 +202,24 @@ class Scanner:
             "detection_method": row.get("detection_method", ""),
         }
 
-        # 传递 file_size（如果有的话）
+        # 传递 file_size, duration, resolution（如果有的话）
         file_size = row.get("file_size")
         if file_size:
             try:
                 data["file_size"] = int(file_size)
             except (ValueError, TypeError):
                 pass
+
+        duration = row.get("duration")
+        if duration:
+            try:
+                data["duration"] = float(duration)
+            except (ValueError, TypeError):
+                pass
+
+        resolution = row.get("resolution", "").strip()
+        if resolution:
+            data["resolution"] = resolution
 
         media_id = db.insert_media(data)
 
@@ -262,6 +273,15 @@ class Scanner:
         except OSError:
             file_size = None
 
+        # 视频文件：获取时长和分辨率
+        duration = None
+        resolution = ""
+        if file_path.suffix.lower() in VIDEO_EXTENSIONS:
+            from ..utils.video import get_video_info
+            vinfo = get_video_info(str(file_path))
+            duration = vinfo.get("duration") or None
+            resolution = vinfo.get("resolution", "")
+
         return {
             "original_title": clean_title,
             "original_path": str(file_path),
@@ -286,6 +306,8 @@ class Scanner:
             "vision_source": "",
             "vision_failed": "false",
             "file_size": file_size,
+            "duration": duration,
+            "resolution": resolution,
         }
 
     def _save_csv(self, rows: List[Dict], output_file: str, append: bool = False) -> None:
@@ -301,7 +323,7 @@ class Scanner:
             "human_detected", "detection_confidence", "detection_timestamp", "detection_method",
             "clip_clothing", "clip_action", "clip_hairstyle",
             "clip_tags", "clip_tags_json", "clip_confidence", "clip_detail", "vision_source",
-            "file_size",
+            "file_size", "duration", "resolution",
         ]
 
         if append:

@@ -429,7 +429,7 @@ class MediaDB:
                     stats["skipped"] += 1
                     continue
 
-                # 尝试从CSV获取文件大小（如果有列）
+                # 尝试从CSV获取元数据（如果有列）
                 file_size = None
                 fs_str = row.get("file_size", "").strip()
                 if fs_str:
@@ -438,9 +438,20 @@ class MediaDB:
                     except ValueError:
                         pass
 
+                duration = None
+                dur_str = row.get("duration", "").strip()
+                if dur_str:
+                    try:
+                        duration = float(dur_str)
+                    except ValueError:
+                        pass
+
+                resolution = row.get("resolution", "").strip()
+
                 existing = self.find_match(
                     original_title=row.get("original_title", ""),
                     file_size=file_size,
+                    duration=duration,
                 )
 
                 data = {
@@ -456,6 +467,9 @@ class MediaDB:
                     "vision_keywords": row.get("vision_keywords", ""),
                     "human_detected": row.get("human_detected", "").lower() == "true",
                     "detection_method": row.get("detection_method", ""),
+                    "file_size": file_size,
+                    "duration": duration,
+                    "resolution": resolution,
                 }
 
                 if existing:
