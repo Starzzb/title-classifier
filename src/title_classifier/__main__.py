@@ -600,7 +600,7 @@ def main():
     vision_cmd.add_argument("-p", "--provider", default="gcli", help="AI Provider")
     vision_cmd.add_argument("--use-yolo", action="store_true", help="使用YOLO姿态检测（分析人体姿态，智能选择代表性帧）")
     vision_cmd.add_argument("--comprehensive", action="store_true", help="全面分析模式（使用detect/pose/segment三个模型，投票决策）")
-    vision_cmd.add_argument("--yolo-conf", type=float, default=0.5, help="YOLO置信度阈值")
+    vision_cmd.add_argument("--yolo-conf", type=float, default=0.4, help="YOLO置信度阈值")
     vision_cmd.add_argument("--use-clip", action="store_true", help="使用CLIP预分类")
     vision_cmd.add_argument("--clip-threshold", type=float, default=0.25, help="CLIP置信度阈值")
     vision_cmd.add_argument("--max-image-size", type=int, default=640, help="图片最大尺寸")

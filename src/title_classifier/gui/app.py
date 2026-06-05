@@ -712,7 +712,8 @@ class TitleClassifierApp(tk.Tk):
                 "- auto: 自动选择（CPU时用OpenVINO，推荐）\n"
                 "- openvino: Intel/AMD CPU加速（FP16，2-3x）\n"
                 "- pytorch: 原始PyTorch\n\n"
-                "首次使用OpenVINO时会自动导出模型")
+                "首次使用OpenVINO时会自动导出模型\n"
+                "支持detect/pose/segment三个模型")
 
         # 第二行：状态显示
         engine_row2 = ttk.Frame(engine_frame)
@@ -797,6 +798,20 @@ class TitleClassifierApp(tk.Tk):
         frames_entry.pack(side=tk.LEFT, padx=4)
         ToolTip(frames_entry, "传给VLM分析的帧数\n\n"
                 "从采样帧中智能选择，传给VLM进行内容分析")
+
+        # 第二行参数
+        param_frame2 = ttk.Frame(scroll_frame)
+        param_frame2.pack(fill=tk.X, padx=4, pady=(0, 2))
+
+        ttk.Label(param_frame2, text="YOLO置信度:").pack(side=tk.LEFT, padx=4)
+        self.s1c_yolo_conf_var = tk.StringVar(value="0.4")
+        yolo_conf_entry = ttk.Entry(param_frame2, textvariable=self.s1c_yolo_conf_var, width=6)
+        yolo_conf_entry.pack(side=tk.LEFT, padx=4)
+        ToolTip(yolo_conf_entry, "YOLO人体检测置信度阈值\n\n"
+                "- 默认0.4：平衡检测率和误检率\n"
+                "- 降低（如0.3）：检测更多人体，但可能误检\n"
+                "- 提高（如0.6）：更严格，但可能漏检\n\n"
+                "建议：保持0.4，除非有明显误检或漏检")
 
         # 选项
         opt_frame = ttk.LabelFrame(scroll_frame, text="选项")
@@ -1929,6 +1944,11 @@ class TitleClassifierApp(tk.Tk):
         if vlm_frames:
             cmd.extend(["--vlm-frames", vlm_frames])
 
+        # YOLO置信度
+        yolo_conf = self.s1c_yolo_conf_var.get()
+        if yolo_conf and yolo_conf != "0.4":
+            cmd.extend(["--yolo-conf", yolo_conf])
+
         if self.s1c_all_var.get():
             cmd.append("--all")
 
@@ -2003,6 +2023,11 @@ class TitleClassifierApp(tk.Tk):
         vlm_frames = self.s1c_vlm_frames_var.get()
         if vlm_frames:
             cmd.extend(["--vlm-frames", vlm_frames])
+
+        # YOLO置信度
+        yolo_conf = self.s1c_yolo_conf_var.get()
+        if yolo_conf and yolo_conf != "0.4":
+            cmd.extend(["--yolo-conf", yolo_conf])
 
         # 重试失败行
         cmd.append("--retry-failed")
