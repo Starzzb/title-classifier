@@ -97,17 +97,35 @@ class SubtitleMuxer:
             result = self._execute_ffmpeg(cmd, progress_callback)
             
             if result["success"]:
-                # overwrite模式：用临时文件替换原文件
+                # overwrite模式：先备份原文件，再替换
                 if self.config["file_handling"] == "overwrite":
                     import shutil
                     if Path(output_path).exists():
+                        backup_path = str(video_path) + ".bak"
                         try:
+                            # 备份原文件
+                            logger.info(f"[覆写] 备份原文件: {Path(video_path).name}")
+                            shutil.copy2(str(video_path), backup_path)
+
+                            # 替换原文件
                             logger.info(f"[覆写] 替换原文件: {Path(video_path).name}")
                             shutil.move(output_path, str(video_path))
                             output_path = str(video_path)
                             logger.info("[覆写] 替换完成")
+
+                            # 删除备份
+                            if Path(backup_path).exists():
+                                Path(backup_path).unlink()
+                                logger.debug("[覆写] 备份已删除")
                         except Exception as move_err:
+                            # 替换失败，尝试恢复备份
                             logger.error(f"[覆写] 替换失败: {move_err}")
+                            if Path(backup_path).exists():
+                                try:
+                                    shutil.move(backup_path, str(video_path))
+                                    logger.info("[覆写] 已从备份恢复原文件")
+                                except Exception as restore_err:
+                                    logger.error(f"[覆写] 恢复失败: {restore_err}")
                             return {"success": False, "error": f"覆写替换失败: {move_err}"}
                     else:
                         return {"success": False, "error": f"临时文件不存在: {output_path}"}
@@ -131,6 +149,13 @@ class SubtitleMuxer:
                 
         except Exception as e:
             logger.error(f"封装字幕失败: {e}")
+            # 清理残留临时文件
+            if output_path and Path(output_path).exists() and "_muxed_tmp" in str(output_path):
+                try:
+                    Path(output_path).unlink()
+                    logger.debug(f"[清理] 已删除临时文件: {output_path}")
+                except Exception:
+                    pass
             return {"success": False, "error": str(e)}
     
     def _get_output_path(self, video_path: str) -> str:
