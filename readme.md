@@ -275,7 +275,7 @@ uv run title-classifier vision [选项]
 | `-p, --provider` | AI Provider |
 | `--use-yolo` | 使用YOLO检测 |
 | `--yolo-model` | YOLO模型类型（detect/pose/segment，可多选） |
-| `--yolo-conf` | YOLO置信度阈值（默认0.5） |
+| `--yolo-conf` | YOLO置信度阈值（默认0.4） |
 | `--use-clip` | 使用CLIP预分类 |
 | `--vlm-frames` | VLM帧数（默认10） |
 | `--analysis-step` | 采样间隔秒数（默认2.0） |
@@ -729,7 +729,7 @@ uv run title-classifier vision --use-yolo --motion-threshold 10.0 -p gcli
 [vision]
 motion_detection = true
 motion_threshold = 5.0       # 变化像素比例阈值（%）
-motion_min_interval = 2.0    # 最小强制推理间隔（秒）
+motion_min_interval = 5.0    # 最小强制推理间隔（秒），需大于采样间隔
 ```
 
 ### 运动检测原理
@@ -744,7 +744,7 @@ motion_min_interval = 2.0    # 最小强制推理间隔（秒）
 
 - **motion_min_interval**：即使画面静止，也每 N 秒强制执行一次 YOLO 推理
 - 防止视频跳转后复用旧结果
-- 默认值：2.0 秒
+- 默认值：5.0 秒（需大于采样间隔才能触发跳帧）
 
 ### 输出统计
 
@@ -1123,8 +1123,21 @@ GUI 所有操作自动同步到数据库：
 
 ### 去重策略
 
-- 基于 `file_size + duration` 快速匹配
-- 仅保留最新路径，旧路径标记为"已移动"
+- **Level 1**: `original_title` 精确匹配 + `file_size` ±1% 区间验证
+- **Level 2**: `file_size` ±1% + `duration` ±1s 区间匹配（兜底）
+- 匹配到已有记录时更新路径，保留旧数据（描述、关键词、标签）
+- 抛弃路径匹配，避免外置硬盘盘符变化导致重复记录
+
+### 视频元数据收集
+
+扫描阶段自动收集：
+- `file_size`：`os.path.getsize()`（毫秒级）
+- `duration`：ffprobe → cv2 备用（秒级）
+- `resolution`：ffprobe → cv2 备用（如 1920x1080）
+
+视觉识别阶段补充：
+- `file_size`：如果扫描时未收集
+- `duration`：如果扫描时未收集
 
 ---
 
@@ -1270,13 +1283,15 @@ title-classifier/
 │       │   └── base.py              # Provider基类
 │       │
 │       ├── utils/
-│       │   ├── video.py             # 视频工具
+│       │   ├── video.py             # 视频工具（get_video_info, 帧提取）
 │       │   ├── image.py             # 图片工具
 │       │   ├── audio.py             # 音频处理（VAD分段 + API调用）
 │       │   ├── atomic_csv.py        # 原子化CSV读写（崩溃安全）
+│       │   ├── config.py            # 配置加载（TOML）
 │       │   ├── file_resolve.py      # 文件路径解析（Stage2重命名后回退查找）
 │       │   ├── muxer.py             # 字幕封装（SRT嵌入视频）
 │       │   ├── subtitle_postprocessor.py  # 字幕后处理
+│       │   ├── prompt_loader.py     # 提示词加载
 │       │   └── stats.py             # 标签统计
 │       │
 │       └── gui/
@@ -1491,7 +1506,99 @@ uv run title-classifier vision --all -p gcli
 
 ## 更新日志
 
-### v8.0.0（当前版本）
+### v8.1.0（当前版本）
+
+**修复：YOLO 帧提取画面比例变形**
+
+- ffmpeg 缩放滤镜修复：只缩放长边，保持原始画面比例
+- 1280x720 视频 max_size=400: 400x400(变形) → 400x226(原比例)
+- 修复正方形视频(1080x1080)不缩放的问题（gt → gte）
+- 关键点检测精度显著提升
+
+**修复：OpenVINO pose/segment 模型失效**
+
+- ultralytics 加载 OpenVINO 模型时未指定 task 参数
+- pose 和 segment 模型被当作 detect 模型加载，完全不输出关键点
+- 修复: `YOLO(path)` → `YOLO(path, task=model_type)` 三处
+- 已清理旧的 OpenVINO 缓存模型
+
+**优化：姿态分析**
+
+- 姿态规则人体归一化：用躯干长度替代硬编码像素阈值
+- 新增姿态类别：手臂抬起、躺卧、双腿张开、弓背/驼背
+- 双侧关键点平均：不再只用左侧关键点
+- 最小躯干阈值：防止躯干过小时所有姿态同时触发
+- 时序平滑：持续 ≥2 帧才算真正姿态变化
+
+**优化：YOLO 置信度**
+
+- 默认置信度 0.5 → 0.4
+- GUI 新增 YOLO 置信度输入框（带范围校验 0.1-0.9）
+- CLI `--yolo-conf` 默认值同步更新
+
+**优化：VLM 提示词**
+
+- 加强 system prompt：增加 file management tool 上下文
+- 加强 system_header：明确 user-owned media 场景
+- 加强 retry prompts：增加 pre-authorized 声明
+- SSL 错误处理：SSL/EOF 类错误增加额外等待时间
+
+**新增：CLIP 详细置信度输出**
+
+- 新增 `clip_detail` 字段，存储每个维度 top-5 标签及置信度
+- JSON 格式: `{"clothing": [{"label": "...", "confidence": 0.82}], ...}`
+
+**新增：数据库去重改为原始文件名匹配**
+
+- 新增 `find_match(original_title, file_size, duration)` 方法
+- Level 1: original_title 精确匹配 + file_size ±1% 区间验证
+- Level 2: file_size ±1% + duration ±1s 区间匹配
+- 抛弃路径匹配，避免外置硬盘盘符变化导致重复记录
+- 匹配到已有记录时更新路径，保留旧数据
+
+**新增：扫描阶段收集视频元数据**
+
+- 新增 `get_video_info()` 一次性获取 duration + resolution
+- scanner 自动收集 file_size / duration / resolution
+- 视觉识别时补充 file_size 和 duration 到数据库
+
+**新增：调试窗口 VLM 帧预览**
+
+- VLM 缩略图可点击，在主画布中预览大图
+- 显示帧序号和时间戳（与 prompt 中图1@20.0s 对应）
+- 独立 photo 引用列表，防止切换帧时缩略图消失
+
+**新增：GUI 进度显示**
+
+- 日志工具栏添加进度状态标签
+- 解析 CLI 输出中的 [1/50] 格式实时更新
+
+**修复：VLM 返回为空未标记失败**
+
+- VLM 返回为空或关键词为空时，vision_failed 未标记为 true
+- 修复后重试失败行功能正常工作
+
+**修复：运动检测兼容灰度帧**
+
+- 某些视频帧是单通道灰度图，cv2.cvtColor 崩溃
+- 添加通道数检查，已灰度的帧直接使用
+
+**修复：debug 窗口 crash**
+
+- self.summary 未初始化就被使用导致 AttributeError
+
+**优化：字幕封装 overwrite 模式备份机制**
+
+- 覆写前先备份原文件为 .bak
+- 替换成功后删除备份
+- 替换失败时自动从备份恢复
+
+**优化：运动检测默认值**
+
+- motion_min_interval 2.0 → 5.0
+- 使运动检测在默认采样间隔(2.0s)下生效
+
+### v8.0.0
 
 **新增：OpenVINO CPU 加速**
 
