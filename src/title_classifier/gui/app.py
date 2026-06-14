@@ -169,12 +169,12 @@ class TitleClassifierApp(ttk.Window):
         ))
 
         # 可调大小的上下分栏：上=标签页，下=日志
-        pane = ttk.Panedwindow(main_frame, orient=tk.VERTICAL)
-        pane.pack(fill=tk.BOTH, expand=True)
+        self.pane = ttk.Panedwindow(main_frame, orient=tk.VERTICAL)
+        self.pane.pack(fill=tk.BOTH, expand=True)
 
         # 上半部分：标签页
-        notebook_frame = ttk.Frame(pane)
-        pane.add(notebook_frame, weight=3)
+        notebook_frame = ttk.Frame(self.pane)
+        self.pane.add(notebook_frame, weight=3)
 
         self.notebook = ttk.Notebook(notebook_frame)
         self.notebook.pack(fill=tk.BOTH, expand=True)
@@ -204,12 +204,14 @@ class TitleClassifierApp(ttk.Window):
         # 切换标签页时更新状态栏
         self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
 
-        # 下半部分：日志区域
-        log_frame = ttk.LabelFrame(pane, text="运行日志")
-        pane.add(log_frame, weight=1)
+        # 下半部分：日志区域（可折叠）
+        self.log_frame = ttk.LabelFrame(self.pane, text="运行日志")
+        self.pane.add(self.log_frame, weight=1)
+        self._log_expanded = True
 
-        log_toolbar = ttk.Frame(log_frame)
+        log_toolbar = ttk.Frame(self.log_frame)
         log_toolbar.pack(fill=tk.X, padx=4, pady=2)
+        ttk.Button(log_toolbar, text="折叠", width=5, command=self._toggle_log).pack(side=tk.LEFT, padx=2)
         ttk.Button(log_toolbar, text="清空日志", command=self._clear_log).pack(side=tk.RIGHT)
         self.stop_btn = ttk.Button(log_toolbar, text="停止", command=self._stop_process, state="disabled")
         self.stop_btn.pack(side=tk.RIGHT, padx=4)
@@ -218,7 +220,7 @@ class TitleClassifierApp(ttk.Window):
         self.progress_label.pack(side=tk.LEFT, padx=4)
         self.ctx.progress_label = self.progress_label
 
-        self.log_text = scrolledtext.ScrolledText(log_frame, height=8, font=("Consolas", 9))
+        self.log_text = scrolledtext.ScrolledText(self.log_frame, height=8, font=("Consolas", 9))
         self.log_text.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
         self.log_text.tag_configure("stdout", foreground="#cccccc")
         self.log_text.tag_configure("stderr", foreground="#ff6666")
@@ -233,6 +235,15 @@ class TitleClassifierApp(ttk.Window):
         gui_handler = GUILogHandler(self.log_text)
         gui_handler.setFormatter(logging.Formatter("[%(name)s] %(message)s"))
         logging.getLogger().addHandler(gui_handler)
+
+    def _toggle_log(self):
+        """折叠/展开日志区"""
+        if self._log_expanded:
+            self.pane.forget(self.log_frame)
+            self._log_expanded = False
+        else:
+            self.pane.add(self.log_frame, weight=1)
+            self._log_expanded = True
 
     def _build_menu_bar(self):
         """构建菜单栏"""
