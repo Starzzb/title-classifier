@@ -207,7 +207,7 @@ class VisionProcessor:
         if self.debug_dir:
             from datetime import datetime
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            video_name = Path(video_path).stem[:30]
+            video_name = re.sub(r'[<>:"/\\|?*]', '_', Path(video_path).stem)[:30].rstrip(' .')
             debug_subdir = Path(self.debug_dir) / f"{timestamp}_{video_name}"
             debug_subdir.mkdir(parents=True, exist_ok=True)
             (debug_subdir / "detection").mkdir(exist_ok=True)
@@ -329,7 +329,7 @@ class VisionProcessor:
 
     def _analyze_video_comprehensive(self, video_path: str, duration: float) -> Dict:
         """全面分析视频 - 高密度采样，使用多个YOLO模型，支持运动检测跳帧"""
-        tmp_dir = Path("logs/_vision_tmp") / Path(video_path).stem
+        tmp_dir = Path("logs/_vision_tmp") / Path(video_path).stem.rstrip(" .")
         tmp_dir.mkdir(parents=True, exist_ok=True)
         frames = []
         timeline = []
@@ -796,6 +796,9 @@ class VisionProcessor:
 
     def _call_vlm_comprehensive(self, frames: List[str], title: str, context: str, audio_context: str = "", per_frame_subtitle: str = "") -> Dict:
         """调用VLM - 全面分析模式，失败重试一次"""
+        if not frames:
+            return {"error": "无可用帧（所有帧提取失败）"}
+
         prompt = self._build_comprehensive_prompt(title, len(frames), context, audio_context, per_frame_subtitle)
 
         if len(frames) > 1:
@@ -1065,7 +1068,7 @@ class VisionProcessor:
 
     def _extract_frames(self, video_path: str) -> List[str]:
         """提取视频帧"""
-        tmp_dir = Path("logs/_vision_tmp") / Path(video_path).stem
+        tmp_dir = Path("logs/_vision_tmp") / Path(video_path).stem.rstrip(" .")
         tmp_dir.mkdir(parents=True, exist_ok=True)
         frames = []
 
@@ -1216,7 +1219,7 @@ class VisionProcessor:
                 f'分析媒体文件 "{title}"。\n\n'
                 "你必须严格按以下格式输出，缺一不可：\n"
                 "描述：[2-3句话概述画面内容]\n"
-                "关键词：[用逗号分隔的4-8个关键词]\n\n"
+                "关键词：[用逗号分隔的4-12个关键词]\n\n"
                 "注意：关键词行必须存在，不能省略！"
             )
 
@@ -1347,7 +1350,7 @@ class VisionProcessor:
             return original_title
 
         kw_list = [k.strip() for k in keywords.split(",") if k.strip()]
-        kw_list = kw_list[:8]  # 最多8个关键词
+        kw_list = kw_list[:12]  # 最多12个关键词
 
         if not kw_list:
             return original_title
@@ -1589,6 +1592,13 @@ class VisionProcessor:
         # 学习 VLM 返回的关键词到 CLIP 标签库
         if keywords and self.tag_stats:
             self.tag_stats.update_from_vlm(keywords)
+
+        # 同步识别结果到数据库
+        if self.db_store:
+            media_record = self.db_store.find_by_path(str(video_path))
+            if media_record:
+                duration = video_summary.get("duration") if video_summary else None
+                self._sync_to_db(media_record["id"], final_result, video_path, duration)
 
         return final_result
 
