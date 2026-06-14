@@ -34,109 +34,62 @@ class StageRefineTab(ttk.Frame):
         self._build_ui()
 
     def _build_ui(self):
-        # CSV文件
-        csv_frame = ttk.LabelFrame(self, text="CSV文件")
-        csv_frame.pack(fill=tk.X, padx=4, pady=4)
+        # 工具栏
+        toolbar = ttk.Frame(self)
+        toolbar.pack(fill=tk.X, padx=4, pady=(4, 2))
 
-        csv_entry = ttk.Entry(csv_frame, textvariable=self.s1b_csv_var, width=60)
-        csv_entry.pack(side=tk.LEFT, padx=4)
-        ttk.Button(csv_frame, text="浏览...", command=self._browse_csv_s1b).pack(side=tk.LEFT, padx=4)
-        ToolTip(csv_entry, "Stage1生成的CSV文件，AI会优化其中的标题")
+        # CSV 文件选择
+        ttk.Label(toolbar, text="CSV:").pack(side=tk.LEFT, padx=(0, 2))
+        csv_entry = ttk.Entry(toolbar, textvariable=self.s1b_csv_var, width=40)
+        csv_entry.pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="浏览", width=5, command=self._browse_csv_s1b).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="加载", width=5, command=self._load_s1b_preview).pack(side=tk.LEFT, padx=2)
 
-        # Provider选择
-        provider_frame = ttk.LabelFrame(self, text="AI Provider")
-        provider_frame.pack(fill=tk.X, padx=4, pady=4)
+        ttk.Separator(toolbar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
 
+        # Provider
+        ttk.Label(toolbar, text="AI:").pack(side=tk.LEFT, padx=(0, 2))
         providers = get_providers_for_gui("1b")
-        provider_combo = ttk.Combobox(provider_frame, textvariable=self.s1b_provider_var, values=providers, state="readonly")
-        provider_combo.pack(side=tk.LEFT, padx=4)
-        ToolTip(provider_combo, "选择AI服务提供商\n- gcli: Google Gemini（推荐）\n- zhipu: 智谱GLM\n- ollama: 本地模型")
+        ttk.Combobox(toolbar, textvariable=self.s1b_provider_var, values=providers, state="readonly", width=8).pack(side=tk.LEFT, padx=2)
 
-        # 过滤选项
-        filter_frame = ttk.LabelFrame(self, text="过滤选项")
-        filter_frame.pack(fill=tk.X, padx=4, pady=4)
+        ttk.Separator(toolbar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
 
-        filter_cb = ttk.Checkbutton(filter_frame, text="只加载 needs_vision=FALSE 的行", variable=self.s1b_filter_vision_var)
-        filter_cb.pack(side=tk.LEFT, padx=4)
-        ToolTip(filter_cb, "勾选后只加载不需要视觉识别的行\n\n"
-                "- needs_vision=FALSE：文件名有意义，可用AI优化标题\n"
-                "- needs_vision=TRUE：文件名无意义，需要视觉识别")
+        # 核心操作按钮
+        ttk.Button(toolbar, text="AI优化选中", command=self._run_refine_selected).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="AI优化全部", command=self._run_refine_all).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="确认写入", command=self._confirm_s1b_results).pack(side=tk.LEFT, padx=2)
 
-        # 执行按钮
-        btn_frame = ttk.Frame(self)
-        btn_frame.pack(fill=tk.X, padx=4, pady=4)
+        ttk.Separator(toolbar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
 
-        load_btn = ttk.Button(btn_frame, text="加载CSV", command=self._load_s1b_preview)
-        load_btn.pack(side=tk.LEFT, padx=4)
-        ToolTip(load_btn, "加载CSV文件到预览表格\n\n"
-                "- 勾选过滤：只加载needs_vision=FALSE的行\n"
-                "- 不勾选：加载所有行")
+        # 更多操作下拉
+        more_btn = ttk.Menubutton(toolbar, text="更多 ▾")
+        more_btn.pack(side=tk.LEFT, padx=2)
+        more_menu = tk.Menu(more_btn, tearoff=0)
+        more_btn["menu"] = more_menu
+        more_menu.add_command(label="填入原标题(选中)", command=self._s1b_fill_original_selected)
+        more_menu.add_command(label="填入原标题(全部)", command=self._s1b_fill_original_all)
+        more_menu.add_separator()
+        more_menu.add_command(label="选中行→需要视觉", command=lambda: self._s1b_batch_needs_vision("TRUE"))
+        more_menu.add_command(label="选中行→不需要视觉", command=lambda: self._s1b_batch_needs_vision("FALSE"))
+        more_menu.add_command(label="选中行→反选", command=lambda: self._s1b_batch_needs_vision("INVERT"))
+        more_menu.add_separator()
+        more_menu.add_command(label="全选", command=self._s1b_select_all)
+        more_menu.add_command(label="取消全选", command=self._s1b_deselect_all)
 
-        use_original_btn = ttk.Button(btn_frame, text="填入原标题", command=self._s1b_fill_original_selected)
-        use_original_btn.pack(side=tk.LEFT, padx=4)
-        ToolTip(use_original_btn, "将选中行的原标题直接填入final_name\n\n"
-                "跳过AI优化，直接使用原标题作为最终文件名")
+        # 搜索框（右侧）
+        ttk.Label(toolbar, text="搜索:").pack(side=tk.RIGHT, padx=(4, 2))
+        self.s1b_search_var = tk.StringVar()
+        search_entry = ttk.Entry(toolbar, textvariable=self.s1b_search_var, width=20)
+        search_entry.pack(side=tk.RIGHT, padx=2)
+        search_entry.bind("<KeyRelease>", self._on_search_changed)
 
-        use_original_all_btn = ttk.Button(btn_frame, text="全部填入原标题", command=self._s1b_fill_original_all)
-        use_original_all_btn.pack(side=tk.LEFT, padx=4)
-        ToolTip(use_original_all_btn, "将所有行的原标题直接填入final_name\n\n"
-                "跳过AI优化，直接使用原标题作为最终文件名")
-
-        refine_btn = ttk.Button(btn_frame, text="AI优化选中行", command=self._run_refine_selected)
-        refine_btn.pack(side=tk.LEFT, padx=4)
-        self._refine_buttons.append(refine_btn)
-        ToolTip(refine_btn, "对选中的行进行AI标题优化\n\n"
-                "操作步骤：\n"
-                "1. 在表格中选择要优化的行（可多选）\n"
-                "2. 点击此按钮进行AI优化\n"
-                "3. 优化结果会显示在'AI优化结果'列")
-
-        refine_all_btn = ttk.Button(btn_frame, text="AI优化全部", command=self._run_refine_all)
-        refine_all_btn.pack(side=tk.LEFT, padx=4)
-        self._refine_buttons.append(refine_all_btn)
-        ToolTip(refine_all_btn, "对表格中所有行进行AI标题优化")
-
-        confirm_btn = ttk.Button(btn_frame, text="确认写入CSV", command=self._confirm_s1b_results)
-        confirm_btn.pack(side=tk.LEFT, padx=4)
-        ToolTip(confirm_btn, "将已修改的标题写入CSV文件\n\n"
-                "只写入通过以下方式修改过的行：\n"
-                "- AI优化选中行/全部\n"
-                "- 双击编辑标题\n"
-                "- 右键采用原标题\n\n"
-                "写入格式: [关键词]_原标题\n"
-                "未修改的行不会被影响\n\n"
-                "注意：needs_vision/audio 切换会即时写入，不需要点此按钮")
-
-        # 批量操作栏
-        batch_frame = ttk.Frame(self)
-        batch_frame.pack(fill=tk.X, padx=4, pady=2)
-
-        ttk.Label(batch_frame, text="批量操作:").pack(side=tk.LEFT, padx=(0, 4))
-
-        set_vision_btn = ttk.Button(batch_frame, text="选中行→需要视觉", command=lambda: self._s1b_batch_needs_vision("TRUE"))
-        set_vision_btn.pack(side=tk.LEFT, padx=2)
-        ToolTip(set_vision_btn, "将选中行的 needs_vision 设为 TRUE")
-
-        unset_vision_btn = ttk.Button(batch_frame, text="选中行→不需要视觉", command=lambda: self._s1b_batch_needs_vision("FALSE"))
-        unset_vision_btn.pack(side=tk.LEFT, padx=2)
-        ToolTip(unset_vision_btn, "将选中行的 needs_vision 设为 FALSE")
-
-        invert_vision_btn = ttk.Button(batch_frame, text="选中行→反选", command=lambda: self._s1b_batch_needs_vision("INVERT"))
-        invert_vision_btn.pack(side=tk.LEFT, padx=2)
-        ToolTip(invert_vision_btn, "反转选中行的 needs_vision 值")
-
-        ttk.Separator(batch_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
-
-        select_all_btn = ttk.Button(batch_frame, text="全选", command=self._s1b_select_all)
-        select_all_btn.pack(side=tk.LEFT, padx=2)
-
-        deselect_btn = ttk.Button(batch_frame, text="取消全选", command=self._s1b_deselect_all)
-        deselect_btn.pack(side=tk.LEFT, padx=2)
-
-        # AI优化进度条
-        self.s1b_progress_bar = ttk.Progressbar(batch_frame, variable=self.s1b_progress_var, maximum=100, length=120)
+        # 过滤选项 + 进度条
+        filter_bar = ttk.Frame(self)
+        filter_bar.pack(fill=tk.X, padx=4, pady=(0, 2))
+        ttk.Checkbutton(filter_bar, text="只加载 needs_vision=FALSE", variable=self.s1b_filter_vision_var).pack(side=tk.LEFT)
+        self.s1b_progress_bar = ttk.Progressbar(filter_bar, variable=self.s1b_progress_var, maximum=100, length=120)
         self.s1b_progress_bar.pack(side=tk.RIGHT, padx=4)
-        self.s1b_progress_label = ttk.Label(batch_frame, text="", width=12)
+        self.s1b_progress_label = ttk.Label(filter_bar, text="", width=12)
         self.s1b_progress_label.pack(side=tk.RIGHT)
 
         # 预览表格
@@ -182,6 +135,27 @@ class StageRefineTab(ttk.Frame):
 
         # 修改行高亮样式
         self.s1b_tree.tag_configure("modified", background="#e6f3ff")
+
+    # ==================== 浏览 ====================
+
+    # ==================== 搜索 ====================
+
+    def _on_search_changed(self, event=None):
+        """搜索框内容变化时过滤表格"""
+        query = self.s1b_search_var.get().lower().strip()
+        for item in self.s1b_tree.get_children():
+            values = self.s1b_tree.item(item, "values")
+            if not query:
+                # 显示所有行
+                self.s1b_tree.reattach(item, "", "end")
+            else:
+                # 搜索 original_title 和 final_name
+                original = str(values[0]).lower() if values[0] else ""
+                refined = str(values[3]).lower() if len(values) > 3 and values[3] else ""
+                if query in original or query in refined:
+                    self.s1b_tree.reattach(item, "", "end")
+                else:
+                    self.s1b_tree.detach(item)
 
     # ==================== 浏览 ====================
 
