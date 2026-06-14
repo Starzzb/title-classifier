@@ -29,6 +29,12 @@ class SettingsDialog(ttk.Toplevel):
         self._build_ui()
         self._load_values()
 
+        # 居中到父窗口
+        self.update_idletasks()
+        px = parent.winfo_rootx() + (parent.winfo_width() - self.winfo_width()) // 2
+        py = parent.winfo_rooty() + (parent.winfo_height() - self.winfo_height()) // 2
+        self.geometry(f"+{max(0, px)}+{max(0, py)}")
+
     def _init_vars(self):
         """初始化变量"""
         # 外观
@@ -62,11 +68,21 @@ class SettingsDialog(ttk.Toplevel):
         scroll_frame = ttk.Frame(canvas)
 
         scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+        canvas_window = canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
+
+        # 让 scroll_frame 宽度跟随 canvas
+        def _on_canvas_resize(event):
+            canvas.itemconfig(canvas_window, width=event.width)
+        canvas.bind("<Configure>", _on_canvas_resize)
 
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # 鼠标滚轮
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
 
         # 外观
         self._build_appearance_section(scroll_frame)
