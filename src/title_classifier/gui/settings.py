@@ -59,8 +59,8 @@ class SettingsDialog(ttk.Toplevel):
 
     def _build_ui(self):
         """构建UI"""
-        main_frame = ttk.Frame(self, padding=10)
-        main_frame.pack(fill=tk.BOTH, expand=True)
+        main_frame = ttk.Frame(self)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         # 滚动区域
         canvas = tk.Canvas(main_frame, highlightthickness=0)
@@ -105,8 +105,8 @@ class SettingsDialog(ttk.Toplevel):
 
     def _build_appearance_section(self, parent):
         """外观区块"""
-        frame = ttk.LabelFrame(parent, text="外观", padding=10)
-        frame.pack(fill=tk.X, pady=(0, 10))
+        frame = ttk.LabelFrame(parent, text="外观")
+        frame.pack(fill=tk.X, pady=(0, 10), padx=10)
 
         row1 = ttk.Frame(frame)
         row1.pack(fill=tk.X, pady=2)
@@ -121,8 +121,8 @@ class SettingsDialog(ttk.Toplevel):
 
     def _build_api_section(self, parent):
         """API 配置区块"""
-        frame = ttk.LabelFrame(parent, text="API 配置", padding=10)
-        frame.pack(fill=tk.X, pady=(0, 10))
+        frame = ttk.LabelFrame(parent, text="API 配置")
+        frame.pack(fill=tk.X, pady=(0, 10), padx=10)
 
         # Provider
         row1 = ttk.Frame(frame)
@@ -157,8 +157,8 @@ class SettingsDialog(ttk.Toplevel):
 
     def _build_inference_section(self, parent):
         """推理配置区块"""
-        frame = ttk.LabelFrame(parent, text="推理配置", padding=10)
-        frame.pack(fill=tk.X, pady=(0, 10))
+        frame = ttk.LabelFrame(parent, text="推理配置")
+        frame.pack(fill=tk.X, pady=(0, 10), padx=10)
 
         row1 = ttk.Frame(frame)
         row1.pack(fill=tk.X, pady=2)
@@ -178,8 +178,8 @@ class SettingsDialog(ttk.Toplevel):
 
     def _build_global_section(self, parent):
         """全局参数区块"""
-        frame = ttk.LabelFrame(parent, text="全局参数", padding=10)
-        frame.pack(fill=tk.X, pady=(0, 10))
+        frame = ttk.LabelFrame(parent, text="全局参数")
+        frame.pack(fill=tk.X, pady=(0, 10), padx=10)
 
         row1 = ttk.Frame(frame)
         row1.pack(fill=tk.X, pady=2)
