@@ -21,6 +21,42 @@ PYTHON = sys.executable
 DEFAULT_CSV = "data/output/title_review.csv"
 
 
+class CollapsibleFrame(ttk.Frame):
+    """可折叠的 LabelFrame"""
+
+    def __init__(self, parent, text="", expanded=True, **kwargs):
+        super().__init__(parent, **kwargs)
+        self._expanded = expanded
+
+        # 标题栏
+        self._header = ttk.Frame(self)
+        self._header.pack(fill=tk.X)
+
+        self._toggle_btn = ttk.Button(
+            self._header, text=f"{'▼' if expanded else '▶'} {text}",
+            command=self._toggle, bootstyle="link",
+        )
+        self._toggle_btn.pack(side=tk.LEFT)
+
+        # 内容区
+        self._content = ttk.Frame(self)
+        if expanded:
+            self._content.pack(fill=tk.BOTH, expand=True, padx=4, pady=(0, 4))
+
+    def _toggle(self):
+        self._expanded = not self._expanded
+        if self._expanded:
+            self._content.pack(fill=tk.BOTH, expand=True, padx=4, pady=(0, 4))
+            self._toggle_btn.configure(text=self._toggle_btn.cget("text").replace("▶", "▼"))
+        else:
+            self._content.pack_forget()
+            self._toggle_btn.configure(text=self._toggle_btn.cget("text").replace("▼", "▶"))
+
+    @property
+    def content(self):
+        return self._content
+
+
 class StageVisionTab(ttk.Frame):
     """Stage1c 视觉识别标签页"""
 
@@ -45,311 +81,146 @@ class StageVisionTab(ttk.Frame):
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # 鼠标滚轮绑定：只在鼠标悬停canvas时生效
         def _on_mousewheel(event):
             canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-
         def _bind_mousewheel(event):
             canvas.bind_all("<MouseWheel>", _on_mousewheel)
-
         def _unbind_mousewheel(event):
             canvas.unbind_all("<MouseWheel>")
-
         canvas.bind("<Enter>", _bind_mousewheel)
         canvas.bind("<Leave>", _unbind_mousewheel)
 
-        # CSV文件
-        csv_frame = ttk.LabelFrame(scroll_frame, text="CSV文件")
-        csv_frame.pack(fill=tk.X, padx=4, pady=4)
+        # CSV + Provider（顶部常驻）
+        top_bar = ttk.Frame(scroll_frame)
+        top_bar.pack(fill=tk.X, padx=4, pady=4)
 
-        csv_entry = ttk.Entry(csv_frame, textvariable=self.ctx.csv_var, width=60)
-        csv_entry.pack(side=tk.LEFT, padx=4)
-        ttk.Button(csv_frame, text="浏览...", command=self._browse_csv).pack(side=tk.LEFT, padx=4)
-        ToolTip(csv_entry, "Stage1生成的CSV文件，视觉识别会分析视频内容并生成描述和关键词")
+        ttk.Label(top_bar, text="CSV:").pack(side=tk.LEFT, padx=(0, 2))
+        ttk.Entry(top_bar, textvariable=self.ctx.csv_var, width=50).pack(side=tk.LEFT, padx=2)
+        ttk.Button(top_bar, text="浏览", width=5, command=self._browse_csv).pack(side=tk.LEFT, padx=2)
 
-        # Provider选择
-        provider_frame = ttk.LabelFrame(scroll_frame, text="AI Provider")
-        provider_frame.pack(fill=tk.X, padx=4, pady=4)
+        ttk.Separator(top_bar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
 
+        ttk.Label(top_bar, text="AI:").pack(side=tk.LEFT, padx=(0, 2))
         self.s1c_provider_var = tk.StringVar(value="gcli")
         providers = get_providers_for_gui("1c")
-        provider_combo = ttk.Combobox(provider_frame, textvariable=self.s1c_provider_var, values=providers, state="readonly")
-        provider_combo.pack(side=tk.LEFT, padx=4)
-        ToolTip(provider_combo, "选择视觉AI服务提供商\n- gcli: Google Gemini（推荐）\n- mimo: 小米MiMo\n- zhipu: 智谱GLM")
+        ttk.Combobox(top_bar, textvariable=self.s1c_provider_var, values=providers, state="readonly", width=8).pack(side=tk.LEFT, padx=2)
 
-        # 推理引擎配置
-        engine_frame = ttk.LabelFrame(scroll_frame, text="推理引擎")
-        engine_frame.pack(fill=tk.X, padx=4, pady=4)
+        # ===== 折叠区1: 推理配置（默认展开） =====
+        sec1 = CollapsibleFrame(scroll_frame, text="推理配置", expanded=True)
+        sec1.pack(fill=tk.X, padx=4, pady=2)
+        self._build_inference_section(sec1.content)
 
-        # 第一行：推理设备 + YOLO后端
-        engine_row1 = ttk.Frame(engine_frame)
-        engine_row1.pack(fill=tk.X, padx=4, pady=2)
+        # ===== 折叠区2: 分析参数（默认折叠） =====
+        sec2 = CollapsibleFrame(scroll_frame, text="分析参数", expanded=False)
+        sec2.pack(fill=tk.X, padx=4, pady=2)
+        self._build_params_section(sec2.content)
 
-        ttk.Label(engine_row1, text="推理设备:").pack(side=tk.LEFT, padx=(0, 4))
-        self.s1c_device_var = tk.StringVar(value="cpu")
-        device_combo = ttk.Combobox(engine_row1, textvariable=self.s1c_device_var, values=["cpu", "auto", "cuda"], state="readonly", width=8)
-        device_combo.pack(side=tk.LEFT, padx=(0, 12))
-        ToolTip(device_combo, "推理设备\n- cpu: CPU多核并行（推荐）\n- auto: 自动检测\n- cuda: GPU加速")
+        # ===== 折叠区3: 字幕封装（默认折叠） =====
+        sec3 = CollapsibleFrame(scroll_frame, text="字幕封装", expanded=False)
+        sec3.pack(fill=tk.X, padx=4, pady=2)
+        self._build_mux_section(sec3.content)
 
-        ttk.Label(engine_row1, text="YOLO后端:").pack(side=tk.LEFT, padx=(0, 4))
-        self.s1c_backend_var = tk.StringVar(value="auto")
-        backend_combo = ttk.Combobox(engine_row1, textvariable=self.s1c_backend_var,
-                                     values=["auto", "openvino", "pytorch"], state="readonly", width=10)
-        backend_combo.pack(side=tk.LEFT, padx=(0, 4))
-        ToolTip(backend_combo, "YOLO推理后端\n\n"
-                "- auto: 自动选择（CPU时用OpenVINO，推荐）\n"
-                "- openvino: Intel/AMD CPU加速（FP16，2-3x）\n"
-                "- pytorch: 原始PyTorch\n\n"
-                "首次使用OpenVINO时会自动导出模型\n"
-                "支持detect/pose/segment三个模型")
-
-        # 第二行：状态显示
-        engine_row2 = ttk.Frame(engine_frame)
-        engine_row2.pack(fill=tk.X, padx=4, pady=(0, 4))
-
-        self.s1c_engine_status = ttk.Label(engine_row2, text="", foreground="#888888")
-        self.s1c_engine_status.pack(side=tk.LEFT)
-        self._update_engine_status()
-
-        # 检测器选项
-        det_frame = ttk.LabelFrame(scroll_frame, text="检测器")
-        det_frame.pack(fill=tk.X, padx=4, pady=4)
-
-        # 全面分析模式选项
-        self.s1c_comprehensive_var = tk.BooleanVar(value=False)
-        comprehensive_cb = ttk.Checkbutton(det_frame, text="全面分析模式（3模型投票）", variable=self.s1c_comprehensive_var)
-        comprehensive_cb.pack(side=tk.LEFT, padx=4)
-        ToolTip(comprehensive_cb, "使用三个YOLO模型进行全面分析\n\n"
-                "- detect + pose + segment 三个模型\n"
-                "- 投票决策：至少两个模型检测到人体才认为有人体\n"
-                "- 提供姿态分析、穿着分割等详细信息\n\n"
-                "注意：会使用更多内存和时间")
-
-        # CLIP选项
-        self.s1c_use_clip_var = tk.BooleanVar()
-        clip_cb = ttk.Checkbutton(det_frame, text="CLIP预分类", variable=self.s1c_use_clip_var)
-        clip_cb.pack(side=tk.LEFT, padx=8)
-        ToolTip(clip_cb, "使用CLIP模型进行图像预分类\n\n"
-                "- 快速识别图片内容类别\n"
-                "- 如果置信度足够高，可跳过VLM调用")
-
-        # 运动检测选项
-        motion_frame = ttk.LabelFrame(scroll_frame, text="运动检测")
-        motion_frame.pack(fill=tk.X, padx=4, pady=4)
-
-        self.s1c_motion_var = tk.BooleanVar(value=True)
-        motion_cb = ttk.Checkbutton(motion_frame, text="启用运动检测前置过滤", variable=self.s1c_motion_var)
-        motion_cb.pack(side=tk.LEFT, padx=4)
-        ToolTip(motion_cb, "跳过静止画面的YOLO推理\n\n"
-                "原理：\n"
-                "- 使用帧差法检测画面变化\n"
-                "- 静止帧复用上一帧结果\n"
-                "- 监控等静态场景可减少60-80%推理\n\n"
-                "建议：保持启用，对动态场景无负面影响")
-
-        ttk.Label(motion_frame, text="阈值(%):").pack(side=tk.LEFT, padx=(12, 4))
-        self.s1c_motion_threshold_var = tk.StringVar(value="5.0")
-        threshold_entry = ttk.Entry(motion_frame, textvariable=self.s1c_motion_threshold_var, width=6)
-        threshold_entry.pack(side=tk.LEFT, padx=4)
-        ToolTip(threshold_entry, "运动检测阈值（变化像素比例）\n\n"
-                "- 默认5%：变化超过5%认为有运动\n"
-                "- 降低（如2%）：更敏感，更多帧执行推理\n"
-                "- 提高（如10%）：更不敏感，更多帧被跳过")
-
-        # 分析参数
-        param_frame = ttk.LabelFrame(scroll_frame, text="分析参数")
-        param_frame.pack(fill=tk.X, padx=4, pady=4)
-
-        ttk.Label(param_frame, text="采样间隔(秒):").pack(side=tk.LEFT, padx=4)
-        self.s1c_analysis_step_var = tk.StringVar(value="2.0")
-        step_entry = ttk.Entry(param_frame, textvariable=self.s1c_analysis_step_var, width=6)
-        step_entry.pack(side=tk.LEFT, padx=4)
-        ToolTip(step_entry, "视频采样间隔\n\n"
-                "- 默认2秒取一帧进行分析\n"
-                "- 较小值：分析更细致，但耗时更长\n"
-                "- 较大值：分析更快，但可能遗漏细节\n\n"
-                "108秒视频，间隔2秒 = 约54帧（自动限制最多50帧）")
-
-        ttk.Label(param_frame, text="最大采样帧数:").pack(side=tk.LEFT, padx=8)
-        self.s1c_max_sample_var = tk.StringVar(value="50")
-        max_sample_entry = ttk.Entry(param_frame, textvariable=self.s1c_max_sample_var, width=6)
-        max_sample_entry.pack(side=tk.LEFT, padx=4)
-        ToolTip(max_sample_entry, "采样帧数上限\n\n"
-                "- 默认50帧，覆盖整个视频\n"
-                "- 增大：分析更细致，但YOLO推理时间更长\n"
-                "- 减小：分析更快，但可能遗漏细节\n\n"
-                "超过此数时，会均匀分布到整个视频")
-
-        ttk.Label(param_frame, text="VLM帧数:").pack(side=tk.LEFT, padx=8)
-        self.s1c_vlm_frames_var = tk.StringVar(value="10")
-        frames_entry = ttk.Entry(param_frame, textvariable=self.s1c_vlm_frames_var, width=6)
-        frames_entry.pack(side=tk.LEFT, padx=4)
-        ToolTip(frames_entry, "传给VLM分析的帧数\n\n"
-                "从采样帧中智能选择，传给VLM进行内容分析")
-
-        # 第二行参数
-        param_frame2 = ttk.Frame(scroll_frame)
-        param_frame2.pack(fill=tk.X, padx=4, pady=(0, 2))
-
-        ttk.Label(param_frame2, text="YOLO置信度:").pack(side=tk.LEFT, padx=4)
-        self.s1c_yolo_conf_var = tk.StringVar(value="0.4")
-        yolo_conf_entry = ttk.Entry(param_frame2, textvariable=self.s1c_yolo_conf_var, width=6)
-        yolo_conf_entry.pack(side=tk.LEFT, padx=4)
-        ToolTip(yolo_conf_entry, "YOLO人体检测置信度阈值\n\n"
-                "- 默认0.4：平衡检测率和误检率\n"
-                "- 降低（如0.3）：检测更多人体，但可能误检\n"
-                "- 提高（如0.6）：更严格，但可能漏检\n\n"
-                "建议：保持0.4，除非有明显误检或漏检")
-
-        # 选项
-        opt_frame = ttk.LabelFrame(scroll_frame, text="选项")
-        opt_frame.pack(fill=tk.X, padx=4, pady=4)
-
-        self.s1c_all_var = tk.BooleanVar()
-        all_cb = ttk.Checkbutton(opt_frame, text="处理所有未识别文件", variable=self.s1c_all_var)
-        all_cb.pack(side=tk.LEFT, padx=4)
-        ToolTip(all_cb, "勾选后会处理所有vision_keywords为空的文件\n\n"
-                "- 不勾选：只处理needs_vision=TRUE的文件\n"
-                "- 勾选：忽略needs_vision字段，处理所有未识别文件")
-
-        self.s1c_debug_var = tk.BooleanVar()
-        debug_cb = ttk.Checkbutton(opt_frame, text="启用调试", variable=self.s1c_debug_var)
-        debug_cb.pack(side=tk.LEFT, padx=4)
-        ToolTip(debug_cb, "启用调试模式，保存检测结果和VLM输入输出\n\n"
-                "- 保存每帧的检测结果（原始帧+标注帧+JSON）\n"
-                "- 保存VLM输入帧和Prompt\n"
-                "- 保存VLM响应\n"
-                "- 处理完成后自动打开调试窗口")
-
-        # 废弃提醒
-        deprecation_frame = ttk.Frame(scroll_frame)
-        deprecation_frame.pack(fill=tk.X, padx=4, pady=4)
-        deprecation_label = ttk.Label(
-            deprecation_frame,
-            text="注意：音频识别功能已转移到独立的 'Stage1c 音频识别' 标签页",
-            foreground="red",
-            font=("Microsoft YaHei", 9, "bold")
-        )
-        deprecation_label.pack(side=tk.LEFT, padx=4)
-        ToolTip(deprecation_label, "vision命令的--audio参数已废弃\n\n"
-                "音频识别现在由独立的audio子命令提供\n"
-                "请使用 'Stage1c 音频识别' 标签页进行音频识别")
-
-        # 字幕封装选项
-        mux_frame = ttk.LabelFrame(scroll_frame, text="字幕封装")
-        mux_frame.pack(fill=tk.X, padx=4, pady=4)
-
-        # 提示信息
-        mux_tip = ttk.Label(
-            mux_frame,
-            text="注意：封装字幕需要先运行音频识别，产出字幕文件",
-            foreground="blue",
-            font=("Microsoft YaHei", 8)
-        )
-        mux_tip.pack(fill=tk.X, padx=4, pady=2)
-
-        # 第一行：封装开关和输出格式
-        mux_row1 = ttk.Frame(mux_frame)
-        mux_row1.pack(fill=tk.X, padx=4, pady=2)
-
-        self.s1c_mux_enabled_var = tk.BooleanVar(value=False)
-        mux_cb = ttk.Checkbutton(mux_row1, text="启用字幕封装", variable=self.s1c_mux_enabled_var)
-        mux_cb.pack(side=tk.LEFT, padx=4)
-        ToolTip(mux_cb, "在视觉识别后自动将字幕封装到视频中\n\n"
-                "需要先运行音频识别生成字幕文件\n"
-                "封装后的视频会保存在原目录")
-
-        ttk.Label(mux_row1, text="输出格式:").pack(side=tk.LEFT, padx=8)
-        self.s1c_mux_format_var = tk.StringVar(value="auto")
-        format_combo = ttk.Combobox(mux_row1, textvariable=self.s1c_mux_format_var,
-                                   values=["auto", "mkv", "mp4"], state="readonly", width=8)
-        format_combo.pack(side=tk.LEFT, padx=4)
-        ToolTip(format_combo, "选择输出视频格式\n\n"
-                "- auto: 保持原视频格式\n"
-                "- mkv: MKV容器（推荐，支持SRT无损封装）\n"
-                "- mp4: MP4容器（SRT会转为mov_text格式）")
-
-        # 第二行：文件处理和字幕处理
-        mux_row2 = ttk.Frame(mux_frame)
-        mux_row2.pack(fill=tk.X, padx=4, pady=2)
-
-        ttk.Label(mux_row2, text="文件处理:").pack(side=tk.LEFT, padx=4)
-        self.s1c_mux_handling_var = tk.StringVar(value="new")
-        handling_combo = ttk.Combobox(mux_row2, textvariable=self.s1c_mux_handling_var,
-                                     values=["new", "overwrite"], state="readonly", width=10)
-        handling_combo.pack(side=tk.LEFT, padx=4)
-        ToolTip(handling_combo, "选择文件处理方式\n\n"
-                "- new: 创建新文件（原文件名_muxed.扩展名）\n"
-                "- overwrite: 覆盖原文件（谨慎使用）")
-
-        ttk.Label(mux_row2, text="字幕处理:").pack(side=tk.LEFT, padx=8)
-        self.s1c_mux_processing_var = tk.StringVar(value="direct")
-        processing_combo = ttk.Combobox(mux_row2, textvariable=self.s1c_mux_processing_var,
-                                       values=["direct", "convert"], state="readonly", width=8)
-        processing_combo.pack(side=tk.LEFT, padx=4)
-        ToolTip(processing_combo, "选择字幕处理方式\n\n"
-                "- direct: 直接封装SRT文件\n"
-                "- convert: 转换为UTF-8编码后封装")
-
-        # 第三行：封装按钮和重试按钮
-        mux_row3 = ttk.Frame(mux_frame)
-        mux_row3.pack(fill=tk.X, padx=4, pady=4)
-
-        mux_btn = ttk.Button(mux_row3, text="封装字幕", command=self._run_mux_subtitle)
-        mux_btn.pack(side=tk.LEFT, padx=4)
-        ToolTip(mux_btn, "将字幕封装到视频中\n\n"
-                "操作步骤：\n"
-                "1. 确保已运行音频识别生成字幕文件\n"
-                "2. 确保已运行视觉识别生成final_name\n"
-                "3. 点击此按钮执行封装")
-
-        retry_btn = ttk.Button(mux_row3, text="重试失败", command=self._retry_failed_mux)
-        retry_btn.pack(side=tk.LEFT, padx=4)
-        ToolTip(retry_btn, "重试之前失败的封装操作\n\n"
-                "如果封装过程中有文件失败，\n"
-                "可以点击此按钮重新尝试")
-
-        # 进度条
-        self.s1c_mux_progress_var = tk.DoubleVar(value=0.0)
-        mux_progress = ttk.Progressbar(mux_frame, variable=self.s1c_mux_progress_var, maximum=100)
-        mux_progress.pack(fill=tk.X, padx=4, pady=2)
-
-        # 状态标签
-        self.s1c_mux_status_var = tk.StringVar(value="就绪")
-        mux_status = ttk.Label(mux_frame, textvariable=self.s1c_mux_status_var)
-        mux_status.pack(fill=tk.X, padx=4, pady=2)
-
-        # 执行按钮
+        # 执行按钮（底部常驻）
         btn_frame = ttk.Frame(scroll_frame)
         btn_frame.pack(fill=tk.X, padx=4, pady=8)
 
-        vision_btn = ttk.Button(btn_frame, text="视觉识别", command=self._run_vision)
-        vision_btn.pack(side=tk.LEFT, padx=4)
-        ToolTip(vision_btn, "对视频进行视觉分析\n\n"
-                "YOLO模式流程：\n"
-                "1. 每2秒提取一帧\n"
-                "2. 用YOLO Pose分析每帧姿态\n"
-                "3. 智能选择代表性帧\n"
-                "4. 将帧图片+姿态信息传给VLM\n"
-                "5. 生成描述、关键词、final_name\n"
-                "6. 生成SRT元数据文件")
+        ttk.Button(btn_frame, text="视觉识别", command=self._run_vision).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_frame, text="重试失败行", command=self._run_vision_retry).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_frame, text="查看调试结果", command=self._open_debug_browser).pack(side=tk.LEFT, padx=4)
 
-        retry_btn = ttk.Button(btn_frame, text="重试失败行", command=self._run_vision_retry)
-        retry_btn.pack(side=tk.LEFT, padx=4)
-        ToolTip(retry_btn, "重试之前视觉识别失败的行\n\n"
-                "只处理 vision_failed=true 的行\n"
-                "成功后自动清除失败标记")
+    def _build_inference_section(self, parent):
+        """推理配置折叠区"""
+        # 推理引擎
+        row1 = ttk.Frame(parent)
+        row1.pack(fill=tk.X, padx=4, pady=2)
+        ttk.Label(row1, text="推理设备:").pack(side=tk.LEFT, padx=(0, 4))
+        self.s1c_device_var = tk.StringVar(value="cpu")
+        ttk.Combobox(row1, textvariable=self.s1c_device_var, values=["cpu", "auto", "cuda"], state="readonly", width=8).pack(side=tk.LEFT, padx=(0, 12))
+        ttk.Label(row1, text="YOLO后端:").pack(side=tk.LEFT, padx=(0, 4))
+        self.s1c_backend_var = tk.StringVar(value="auto")
+        ttk.Combobox(row1, textvariable=self.s1c_backend_var, values=["auto", "openvino", "pytorch"], state="readonly", width=10).pack(side=tk.LEFT)
 
-        ttk.Separator(btn_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8)
+        # 状态
+        row2 = ttk.Frame(parent)
+        row2.pack(fill=tk.X, padx=4, pady=(0, 4))
+        self.s1c_engine_status = ttk.Label(row2, text="", foreground="#888888")
+        self.s1c_engine_status.pack(side=tk.LEFT)
+        self._update_engine_status()
 
-        debug_btn = ttk.Button(btn_frame, text="查看调试结果", command=self._open_debug_browser)
-        debug_btn.pack(side=tk.LEFT, padx=4)
-        ToolTip(debug_btn, "浏览并打开已有的调试结果\n\n"
-                "查看之前视觉识别保存的调试数据：\n"
-                "- 每帧的YOLO检测结果（detect/pose/segment）\n"
-                "- 投票决策详情\n"
-                "- 姿态关键点\n"
-                "- VLM输入输出")
+        # 检测模式
+        row3 = ttk.Frame(parent)
+        row3.pack(fill=tk.X, padx=4, pady=2)
+        self.s1c_comprehensive_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(row3, text="全面分析模式（3模型投票）", variable=self.s1c_comprehensive_var).pack(side=tk.LEFT)
+        self.s1c_use_clip_var = tk.BooleanVar()
+        ttk.Checkbutton(row3, text="CLIP预分类", variable=self.s1c_use_clip_var).pack(side=tk.LEFT, padx=12)
+
+        # 运动检测
+        row4 = ttk.Frame(parent)
+        row4.pack(fill=tk.X, padx=4, pady=2)
+        self.s1c_motion_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(row4, text="运动检测", variable=self.s1c_motion_var).pack(side=tk.LEFT)
+        ttk.Label(row4, text="阈值(%):").pack(side=tk.LEFT, padx=(12, 4))
+        self.s1c_motion_threshold_var = tk.StringVar(value="5.0")
+        ttk.Entry(row4, textvariable=self.s1c_motion_threshold_var, width=6).pack(side=tk.LEFT)
+
+    def _build_params_section(self, parent):
+        """分析参数折叠区"""
+        row1 = ttk.Frame(parent)
+        row1.pack(fill=tk.X, padx=4, pady=2)
+        ttk.Label(row1, text="采样间隔(秒):").pack(side=tk.LEFT, padx=4)
+        self.s1c_analysis_step_var = tk.StringVar(value="2.0")
+        ttk.Entry(row1, textvariable=self.s1c_analysis_step_var, width=6).pack(side=tk.LEFT, padx=4)
+        ttk.Label(row1, text="最大采样帧数:").pack(side=tk.LEFT, padx=8)
+        self.s1c_max_sample_var = tk.StringVar(value="50")
+        ttk.Entry(row1, textvariable=self.s1c_max_sample_var, width=6).pack(side=tk.LEFT, padx=4)
+        ttk.Label(row1, text="VLM帧数:").pack(side=tk.LEFT, padx=8)
+        self.s1c_vlm_frames_var = tk.StringVar(value="10")
+        ttk.Entry(row1, textvariable=self.s1c_vlm_frames_var, width=6).pack(side=tk.LEFT, padx=4)
+
+        row2 = ttk.Frame(parent)
+        row2.pack(fill=tk.X, padx=4, pady=2)
+        ttk.Label(row2, text="YOLO置信度:").pack(side=tk.LEFT, padx=4)
+        self.s1c_yolo_conf_var = tk.StringVar(value="0.4")
+        ttk.Entry(row2, textvariable=self.s1c_yolo_conf_var, width=6).pack(side=tk.LEFT, padx=4)
+
+        row3 = ttk.Frame(parent)
+        row3.pack(fill=tk.X, padx=4, pady=2)
+        self.s1c_all_var = tk.BooleanVar()
+        ttk.Checkbutton(row3, text="处理所有未识别文件", variable=self.s1c_all_var).pack(side=tk.LEFT, padx=4)
+        self.s1c_debug_var = tk.BooleanVar()
+        ttk.Checkbutton(row3, text="启用调试", variable=self.s1c_debug_var).pack(side=tk.LEFT, padx=12)
+
+    def _build_mux_section(self, parent):
+        """字幕封装折叠区"""
+        ttk.Label(parent, text="需要先运行音频识别产出字幕文件", foreground="blue", font=("Microsoft YaHei", 8)).pack(fill=tk.X, padx=4, pady=2)
+
+        row1 = ttk.Frame(parent)
+        row1.pack(fill=tk.X, padx=4, pady=2)
+        self.s1c_mux_enabled_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(row1, text="启用字幕封装", variable=self.s1c_mux_enabled_var).pack(side=tk.LEFT, padx=4)
+        ttk.Label(row1, text="输出格式:").pack(side=tk.LEFT, padx=8)
+        self.s1c_mux_format_var = tk.StringVar(value="auto")
+        ttk.Combobox(row1, textvariable=self.s1c_mux_format_var, values=["auto", "mkv", "mp4"], state="readonly", width=8).pack(side=tk.LEFT, padx=4)
+
+        row2 = ttk.Frame(parent)
+        row2.pack(fill=tk.X, padx=4, pady=2)
+        ttk.Label(row2, text="文件处理:").pack(side=tk.LEFT, padx=4)
+        self.s1c_mux_handling_var = tk.StringVar(value="new")
+        ttk.Combobox(row2, textvariable=self.s1c_mux_handling_var, values=["new", "overwrite"], state="readonly", width=10).pack(side=tk.LEFT, padx=4)
+        ttk.Label(row2, text="字幕处理:").pack(side=tk.LEFT, padx=8)
+        self.s1c_mux_processing_var = tk.StringVar(value="direct")
+        ttk.Combobox(row2, textvariable=self.s1c_mux_processing_var, values=["direct", "convert"], state="readonly", width=8).pack(side=tk.LEFT, padx=4)
+
+        row3 = ttk.Frame(parent)
+        row3.pack(fill=tk.X, padx=4, pady=4)
+        ttk.Button(row3, text="封装字幕", command=self._run_mux_subtitle).pack(side=tk.LEFT, padx=4)
+        ttk.Button(row3, text="重试失败", command=self._retry_failed_mux).pack(side=tk.LEFT, padx=4)
+
+        self.s1c_mux_progress_var = tk.DoubleVar(value=0.0)
+        ttk.Progressbar(parent, variable=self.s1c_mux_progress_var, maximum=100).pack(fill=tk.X, padx=4, pady=2)
+        self.s1c_mux_status_var = tk.StringVar(value="就绪")
+        ttk.Label(parent, textvariable=self.s1c_mux_status_var).pack(fill=tk.X, padx=4, pady=2)
 
     # ==================== 文件浏览 ====================
 
