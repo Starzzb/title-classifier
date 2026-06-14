@@ -85,6 +85,14 @@ class DebugWindow(ttk.Toplevel):
         self.geometry("1600x900")
         self.minsize(1200, 700)
 
+        # 设置窗口图标
+        try:
+            icon_path = Path(__file__).parent / "assets" / "icon.ico"
+            if icon_path.exists():
+                self.iconbitmap(str(icon_path))
+        except Exception:
+            pass
+
         self.debug_dir = Path(debug_dir)
         self.current_frame_idx = 0
         self.frame_data = []

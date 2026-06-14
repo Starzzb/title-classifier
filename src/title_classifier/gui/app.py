@@ -102,6 +102,14 @@ class TitleClassifierApp(ttk.Window):
         self.geometry("900x850")
         self.minsize(800, 700)
 
+        # 设置窗口图标
+        try:
+            icon_path = Path(__file__).parent / "assets" / "icon.ico"
+            if icon_path.exists():
+                self.iconbitmap(str(icon_path))
+        except Exception:
+            pass
+
         self.process = None
         self.running = False
 

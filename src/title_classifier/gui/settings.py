@@ -21,6 +21,14 @@ class SettingsDialog(ttk.Toplevel):
         self.transient(parent)
         self.grab_set()
 
+        # 设置窗口图标
+        try:
+            icon_path = Path(__file__).parent / "assets" / "icon.ico"
+            if icon_path.exists():
+                self.iconbitmap(str(icon_path))
+        except Exception:
+            pass
+
         self.ctx = ctx
         self.config = load_merged_config()
 
