@@ -2,7 +2,9 @@
 
 import os
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, scrolledtext
+from tkinter import filedialog, messagebox, scrolledtext
+import ttkbootstrap as ttk
+from ttkbootstrap.constants import *
 import subprocess
 import threading
 import sys
@@ -22,6 +24,7 @@ from ..utils.file_resolve import resolve_media_path
 PROJECT_DIR = Path(__file__).parent.parent.parent.parent.resolve()
 PYTHON = sys.executable
 DEFAULT_CSV = "data/output/title_review.csv"
+THEME_NAME = "solar"  # 默认暗色主题
 
 
 class ToolTip:
@@ -100,12 +103,11 @@ class GUILogHandler(logging.Handler):
         self.text_widget.configure(state="disabled")
 
 
-class TitleClassifierApp(tk.Tk):
+class TitleClassifierApp(ttk.Window):
     """视频标题分类工具主窗口"""
 
     def __init__(self):
-        super().__init__()
-        self.title("视频标题分类工具 v7.5")
+        super().__init__(title="视频标题分类工具 v8.1", themename=THEME_NAME)
         self.geometry("900x850")
         self.minsize(800, 700)
 
@@ -171,7 +173,7 @@ class TitleClassifierApp(tk.Tk):
         ))
 
         # 可调大小的上下分栏：上=标签页，下=日志
-        pane = ttk.PanedWindow(main_frame, orient=tk.VERTICAL)
+        pane = ttk.Panedwindow(main_frame, orient=tk.VERTICAL)
         pane.pack(fill=tk.BOTH, expand=True)
 
         # 上半部分：标签页
