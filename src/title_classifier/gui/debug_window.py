@@ -171,21 +171,15 @@ class DebugWindow(ttk.Toplevel):
         self.thumb_canvas.pack(side=LEFT, fill=BOTH, expand=True)
         thumb_scrollbar.pack(side=RIGHT, fill=Y)
 
-        # 鼠标滚轮（只在悬停时生效）
+        # 鼠标滚轮（只在悬停缩略图区时生效）
         def _thumb_mousewheel(event):
             try:
                 self.thumb_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
             except tk.TclError:
                 pass
 
-        def _bind_thumb_scroll(event):
-            self.thumb_canvas.bind_all("<MouseWheel>", _thumb_mousewheel, add="+")
-
-        def _unbind_thumb_scroll(event):
-            self.thumb_canvas.unbind_all("<MouseWheel>")
-
-        self.thumb_canvas.bind("<Enter>", _bind_thumb_scroll)
-        self.thumb_canvas.bind("<Leave>", _unbind_thumb_scroll)
+        self.thumb_canvas.bind("<MouseWheel>", _thumb_mousewheel)
+        self.thumb_inner.bind("<MouseWheel>", lambda e: _thumb_mousewheel(e))
 
         self.thumb_labels = []
 
@@ -212,6 +206,14 @@ class DebugWindow(ttk.Toplevel):
         canvas_frame.rowconfigure(0, weight=1)
         canvas_frame.columnconfigure(0, weight=1)
 
+        # 中栏大图滚轮
+        def _center_mousewheel(event):
+            try:
+                self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except tk.TclError:
+                pass
+        self.canvas.bind("<MouseWheel>", _center_mousewheel)
+
         # ── 右栏：检测结果面板 ──
         right_frame = ttk.Frame(pane)
         pane.add(right_frame, weight=2)
@@ -229,6 +231,15 @@ class DebugWindow(ttk.Toplevel):
 
         right_scroll_canvas.pack(side=LEFT, fill=BOTH, expand=True)
         right_scrollbar.pack(side=RIGHT, fill=Y)
+
+        # 右栏滚轮
+        def _right_mousewheel(event):
+            try:
+                right_scroll_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except tk.TclError:
+                pass
+        right_scroll_canvas.bind("<MouseWheel>", _right_mousewheel)
+        right_inner.bind("<MouseWheel>", lambda e: _right_mousewheel(e))
 
         # 右栏内容：检测结果（展开）
         sec_detection = CollapsibleFrame(right_inner, text="检测结果", expanded=True)
