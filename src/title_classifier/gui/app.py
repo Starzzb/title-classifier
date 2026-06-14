@@ -211,7 +211,7 @@ class TitleClassifierApp(ttk.Window):
 
         log_toolbar = ttk.Frame(self.log_frame)
         log_toolbar.pack(fill=tk.X, padx=4, pady=2)
-        ttk.Button(log_toolbar, text="折叠", width=5, command=self._toggle_log).pack(side=tk.LEFT, padx=2)
+        ttk.Button(log_toolbar, text="展开/折叠", width=8, command=self._toggle_log).pack(side=tk.LEFT, padx=2)
         ttk.Button(log_toolbar, text="清空日志", command=self._clear_log).pack(side=tk.RIGHT)
         self.stop_btn = ttk.Button(log_toolbar, text="停止", command=self._stop_process, state="disabled")
         self.stop_btn.pack(side=tk.RIGHT, padx=4)
@@ -265,6 +265,11 @@ class TitleClassifierApp(ttk.Window):
 
         view_menu.add_separator()
         view_menu.add_command(label="调试查看器...", command=self._open_debug_browser)
+        view_menu.add_separator()
+        view_menu.add_command(label="显示/隐藏日志区", command=self._toggle_log, accelerator="Ctrl+L")
+
+        # 绑定快捷键
+        self.bind("<Control-l>", lambda e: self._toggle_log())
 
         # 工具菜单
         tools_menu = tk.Menu(menubar, tearoff=0)
