@@ -143,7 +143,7 @@ class DebugWindow(ttk.Toplevel):
         main_frame.pack(fill=BOTH, expand=True, padx=5, pady=(5, 0))
 
         # 三栏 PanedWindow
-        pane = ttk.PanedWindow(main_frame, orient=HORIZONTAL)
+        pane = ttk.Panedwindow(main_frame, orient=HORIZONTAL)
         pane.pack(fill=BOTH, expand=True)
 
         # ── 左栏：缩略图网格 ──
