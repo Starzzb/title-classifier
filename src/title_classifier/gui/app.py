@@ -139,6 +139,9 @@ class TitleClassifierApp(ttk.Window):
 
     def _build_ui(self):
         """构建UI"""
+        # 菜单栏
+        self._build_menu_bar()
+
         main_frame = ttk.Frame(self)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
 
@@ -227,6 +230,59 @@ class TitleClassifierApp(ttk.Window):
         gui_handler = GUILogHandler(self.log_text)
         gui_handler.setFormatter(logging.Formatter("[%(name)s] %(message)s"))
         logging.getLogger().addHandler(gui_handler)
+
+    def _build_menu_bar(self):
+        """构建菜单栏"""
+        menubar = tk.Menu(self)
+        self.config(menu=menubar)
+
+        # 视图菜单
+        view_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="视图", menu=view_menu)
+
+        # 主题子菜单
+        theme_menu = tk.Menu(view_menu, tearoff=0)
+        view_menu.add_cascade(label="主题", menu=theme_menu)
+        for theme_name in ["solar", "cosmo", "darkly", "flatly", "superhero", "cyborg"]:
+            theme_menu.add_command(
+                label=f"{'[当前] ' if theme_name == THEME_NAME else ''}{theme_name}",
+                command=lambda t=theme_name: self._switch_theme(t),
+            )
+
+        view_menu.add_separator()
+        view_menu.add_command(label="调试查看器...", command=self._open_debug_browser)
+
+        # 工具菜单
+        tools_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="工具", menu=tools_menu)
+        tools_menu.add_command(label="设置...", command=self._open_settings)
+
+    def _switch_theme(self, theme_name: str):
+        """切换主题"""
+        try:
+            self.style.theme_use(theme_name)
+            print(f"[信息] 主题已切换: {theme_name}")
+        except Exception as e:
+            print(f"[错误] 主题切换失败: {e}")
+
+    def _open_debug_browser(self):
+        """打开调试浏览器"""
+        from tkinter import filedialog
+        debug_dir = filedialog.askdirectory(
+            title="选择调试目录",
+            initialdir=str(PROJECT_DIR / "data" / "debug"),
+        )
+        if debug_dir:
+            from .debug_window import open_debug_window
+            open_debug_window(self, debug_dir)
+
+    def _open_settings(self):
+        """打开设置对话框"""
+        try:
+            from .settings import SettingsDialog
+            SettingsDialog(self, self.ctx)
+        except ImportError:
+            print("[信息] 设置对话框尚未实现")
 
     def _on_tab_changed(self, event=None):
         """切换标签页时更新状态栏"""
