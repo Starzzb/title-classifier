@@ -171,11 +171,21 @@ class DebugWindow(ttk.Toplevel):
         self.thumb_canvas.pack(side=LEFT, fill=BOTH, expand=True)
         thumb_scrollbar.pack(side=RIGHT, fill=Y)
 
-        # 鼠标滚轮
+        # 鼠标滚轮（只在悬停时生效）
         def _thumb_mousewheel(event):
-            self.thumb_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            try:
+                self.thumb_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except tk.TclError:
+                pass
 
-        self.thumb_canvas.bind_all("<MouseWheel>", _thumb_mousewheel, add="+")
+        def _bind_thumb_scroll(event):
+            self.thumb_canvas.bind_all("<MouseWheel>", _thumb_mousewheel, add="+")
+
+        def _unbind_thumb_scroll(event):
+            self.thumb_canvas.unbind_all("<MouseWheel>")
+
+        self.thumb_canvas.bind("<Enter>", _bind_thumb_scroll)
+        self.thumb_canvas.bind("<Leave>", _unbind_thumb_scroll)
 
         self.thumb_labels = []
 
