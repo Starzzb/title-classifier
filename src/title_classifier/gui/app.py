@@ -109,6 +109,7 @@ class TitleClassifierApp(ttk.Window):
 
         # 初始化数据库
         from ..core.db_store import MediaDB
+        from ..utils.config import load_merged_config
         db = MediaDB()
         db.init_schema()
 
@@ -116,6 +117,8 @@ class TitleClassifierApp(ttk.Window):
         self.ctx = AppContext(
             db=db,
             csv_var=tk.StringVar(value=DEFAULT_CSV),
+            config=load_merged_config(),
+            user_config_path=PROJECT_DIR / "config" / "user.toml",
         )
 
         self._build_ui()
