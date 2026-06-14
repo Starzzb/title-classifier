@@ -118,7 +118,7 @@ class StageScanTab(ttk.Frame):
             cmd.append("--force")
 
         # 扫描完成后同步 CSV 路径到所有标签页 + 同步到数据库
-        def on_scan_complete():
+        def on_scan_complete(returncode=None):
             self.ctx.csv_var.set(output)
             self._sync_csv_to_db(output)
 

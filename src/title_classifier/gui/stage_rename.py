@@ -167,7 +167,7 @@ class StageRenameTab(ttk.Frame):
         if self.s2_dry_run_var.get():
             cmd.append("--dry-run")
 
-        def on_rename_complete():
+        def on_rename_complete(returncode=None):
             # 同步重命名结果到数据库
             self._sync_csv_to_db(csv)
 

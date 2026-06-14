@@ -314,7 +314,7 @@ class StageVisionTab(ttk.Frame):
             self._debug_enabled = False
 
         # 定义完成回调，用于同步数据库
-        def on_vision_complete():
+        def on_vision_complete(returncode=None):
             if getattr(self, '_debug_enabled', False):
                 print('[调试] 调试数据已保存，点击"查看调试结果"按钮可查看')
             # 同步视觉识别结果到数据库
@@ -394,7 +394,7 @@ class StageVisionTab(ttk.Frame):
         cmd.append("--retry-failed")
 
         # 定义完成回调
-        def on_retry_complete():
+        def on_retry_complete(returncode=None):
             self._sync_csv_to_db(csv)
 
         self._run_command(cmd, callback=on_retry_complete)
