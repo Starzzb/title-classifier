@@ -17,9 +17,10 @@ DEFAULT_CSV = "data/output/title_review.csv"
 class StageRefineTab(ttk.Frame):
     """Stage1b: AI标题优化标签页"""
 
-    def __init__(self, parent, ctx, sync_csv_to_db=None):
+    def __init__(self, parent, ctx, run_command_callback=None, sync_csv_to_db=None):
         super().__init__(parent)
         self.ctx = ctx
+        self._run_command = run_command_callback
         self._sync_csv_to_db = sync_csv_to_db
 
         # 实例变量

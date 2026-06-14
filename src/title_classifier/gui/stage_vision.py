@@ -60,10 +60,12 @@ class CollapsibleFrame(ttk.Frame):
 class StageVisionTab(ttk.Frame):
     """Stage1c 视觉识别标签页"""
 
-    def __init__(self, master, ctx: AppContext, run_command, **kwargs):
+    def __init__(self, master, ctx: AppContext, run_command=None, gui_sync_to_db=None, sync_csv_to_db=None, **kwargs):
         super().__init__(master, **kwargs)
         self.ctx = ctx
         self._run_command = run_command
+        self._gui_sync_to_db = gui_sync_to_db
+        self._sync_csv_to_db = sync_csv_to_db
         self._failed_mux_files = []
         self._debug_enabled = False
         self._build()

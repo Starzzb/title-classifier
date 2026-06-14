@@ -16,10 +16,11 @@ PYTHON = sys.executable
 class StageRenameTab(ttk.Frame):
     """Stage2 重命名标签页"""
 
-    def __init__(self, master, ctx: AppContext, run_command, **kwargs):
+    def __init__(self, master, ctx: AppContext, run_command=None, sync_csv_to_db=None, **kwargs):
         super().__init__(master, **kwargs)
         self.ctx = ctx
         self._run_command = run_command
+        self._sync_csv_to_db = sync_csv_to_db
         self._build()
 
     def _build(self):

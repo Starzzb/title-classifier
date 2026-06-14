@@ -18,10 +18,11 @@ DEFAULT_CSV = "data/output/title_review.csv"
 class StageAudioTab(ttk.Frame):
     """Stage1c 音频识别"""
 
-    def __init__(self, parent, ctx: AppContext, run_command_callback=None):
+    def __init__(self, parent, ctx: AppContext, run_command_callback=None, gui_sync_to_db=None):
         super().__init__(parent)
         self.ctx = ctx
         self._run_command = run_command_callback
+        self._gui_sync_to_db = gui_sync_to_db
         self._build_ui()
         self._load_audio_config_to_gui()
 

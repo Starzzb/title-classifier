@@ -17,10 +17,11 @@ DEFAULT_CSV = "data/output/title_review.csv"
 class StageScanTab(ttk.Frame):
     """Stage1 扫描入库"""
 
-    def __init__(self, parent, ctx: AppContext, run_command_callback=None):
+    def __init__(self, parent, ctx: AppContext, run_command_callback=None, sync_csv_to_db=None):
         super().__init__(parent)
         self.ctx = ctx
         self._run_command = run_command_callback
+        self._sync_csv_to_db = sync_csv_to_db
         self._build_ui()
 
     def _build_ui(self):
