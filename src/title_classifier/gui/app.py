@@ -364,7 +364,7 @@ class TitleClassifierApp(ttk.Window):
             return
         try:
             from ..utils.atomic_csv import safe_read_csv
-            rows, _ = safe_read_csv(csv_path)
+            fieldnames, rows = safe_read_csv(csv_path)
             for row in rows:
                 original_path = row.get("original_path", "").strip()
                 if not original_path:
