@@ -35,13 +35,13 @@ class StageRefineTab(ttk.Frame):
         self._build_ui()
 
     def _build_ui(self):
-        # 工具栏
+        # ===== 第一行：操作栏 =====
         toolbar = ttk.Frame(self)
         toolbar.pack(fill=tk.X, padx=4, pady=(4, 2))
 
         # CSV 文件选择
         ttk.Label(toolbar, text="CSV:").pack(side=tk.LEFT, padx=(0, 2))
-        csv_entry = ttk.Entry(toolbar, textvariable=self.s1b_csv_var, width=40)
+        csv_entry = ttk.Entry(toolbar, textvariable=self.s1b_csv_var, width=35)
         csv_entry.pack(side=tk.LEFT, padx=2)
         ttk.Button(toolbar, text="浏览", width=5, command=self._browse_csv_s1b).pack(side=tk.LEFT, padx=2)
         ttk.Button(toolbar, text="加载", width=5, command=self._load_s1b_preview).pack(side=tk.LEFT, padx=2)
@@ -58,43 +58,59 @@ class StageRefineTab(ttk.Frame):
         # 核心操作按钮
         ttk.Button(toolbar, text="AI优化选中", command=self._run_refine_selected).pack(side=tk.LEFT, padx=2)
         ttk.Button(toolbar, text="AI优化全部", command=self._run_refine_all).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="填入原标题", command=self._s1b_fill_original_smart).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="编辑", width=4, command=self._s1b_edit).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="删除", width=4, command=self._s1b_delete).pack(side=tk.LEFT, padx=2)
         ttk.Button(toolbar, text="确认写入", command=self._confirm_s1b_results).pack(side=tk.LEFT, padx=2)
 
         ttk.Separator(toolbar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
 
-        # 更多操作下拉
-        more_btn = ttk.Menubutton(toolbar, text="更多 ▾")
+        # 批量操作下拉
+        more_btn = ttk.Menubutton(toolbar, text="批量 ▾")
         more_btn.pack(side=tk.LEFT, padx=2)
         more_menu = tk.Menu(more_btn, tearoff=0)
         more_btn["menu"] = more_menu
-        more_menu.add_command(label="填入原标题(选中)", command=self._s1b_fill_original_selected)
         more_menu.add_command(label="填入原标题(全部)", command=self._s1b_fill_original_all)
         more_menu.add_separator()
         more_menu.add_command(label="选中行→需要视觉", command=lambda: self._s1b_batch_needs_vision("TRUE"))
         more_menu.add_command(label="选中行→不需要视觉", command=lambda: self._s1b_batch_needs_vision("FALSE"))
         more_menu.add_command(label="选中行→反选", command=lambda: self._s1b_batch_needs_vision("INVERT"))
         more_menu.add_separator()
-        more_menu.add_command(label="全选", command=self._s1b_select_all)
-        more_menu.add_command(label="取消全选", command=self._s1b_deselect_all)
+        more_menu.add_command(label="重置为原标题(选中)", command=self._s1b_reset_to_original)
+
+        # 修改计数器（右侧）
+        self.s1b_modified_label = ttk.Label(toolbar, text="已修改 0/0", foreground="#888888")
+        self.s1b_modified_label.pack(side=tk.RIGHT, padx=8)
+
+        # ===== 第二行：辅助栏 =====
+        aux_bar = ttk.Frame(self)
+        aux_bar.pack(fill=tk.X, padx=4, pady=(0, 2))
+
+        ttk.Checkbutton(aux_bar, text="只加载 needs_vision=FALSE", variable=self.s1b_filter_vision_var).pack(side=tk.LEFT, padx=(0, 8))
+
+        self.s1b_show_modified_var = tk.BooleanVar()
+        ttk.Checkbutton(aux_bar, text="只显示已修改", variable=self.s1b_show_modified_var, command=self._on_filter_modified).pack(side=tk.LEFT, padx=(0, 8))
+
+        ttk.Separator(aux_bar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=4)
+
+        ttk.Button(aux_bar, text="全选", width=5, command=self._s1b_select_all).pack(side=tk.LEFT, padx=2)
+        ttk.Button(aux_bar, text="取消全选", width=6, command=self._s1b_deselect_all).pack(side=tk.LEFT, padx=2)
 
         # 搜索框（右侧）
-        ttk.Label(toolbar, text="搜索:").pack(side=tk.RIGHT, padx=(4, 2))
+        ttk.Label(aux_bar, text="搜索:").pack(side=tk.RIGHT, padx=(4, 2))
         self.s1b_search_var = tk.StringVar()
-        search_entry = ttk.Entry(toolbar, textvariable=self.s1b_search_var, width=20)
+        search_entry = ttk.Entry(aux_bar, textvariable=self.s1b_search_var, width=20)
         search_entry.pack(side=tk.RIGHT, padx=2)
         search_entry.bind("<KeyRelease>", self._on_search_changed)
 
-        # 过滤选项 + 进度条
-        filter_bar = ttk.Frame(self)
-        filter_bar.pack(fill=tk.X, padx=4, pady=(0, 2))
-        ttk.Checkbutton(filter_bar, text="只加载 needs_vision=FALSE", variable=self.s1b_filter_vision_var).pack(side=tk.LEFT)
-        self.s1b_progress_bar = ttk.Progressbar(filter_bar, variable=self.s1b_progress_var, maximum=100, length=120)
+        # 进度条
+        self.s1b_progress_bar = ttk.Progressbar(aux_bar, variable=self.s1b_progress_var, maximum=100, length=120)
         self.s1b_progress_bar.pack(side=tk.RIGHT, padx=4)
-        self.s1b_progress_label = ttk.Label(filter_bar, text="", width=12)
+        self.s1b_progress_label = ttk.Label(aux_bar, text="", width=12)
         self.s1b_progress_label.pack(side=tk.RIGHT)
 
-        # 预览表格
-        preview_frame = ttk.LabelFrame(self, text="优化结果预览（右键菜单可编辑）")
+        # ===== 预览表格 =====
+        preview_frame = ttk.LabelFrame(self, text="优化结果预览（双击编辑，右键更多操作）")
         preview_frame.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
 
         columns = ("original", "needs_vision", "audio_recognized", "refined")
@@ -115,20 +131,15 @@ class StageRefineTab(ttk.Frame):
 
         # 右键菜单
         self.s1b_context_menu = tk.Menu(self, tearoff=0)
-
         self.s1b_context_menu.add_command(label="编辑标题", command=self._s1b_edit)
         self.s1b_context_menu.add_command(label="采用原标题", command=self._s1b_use_original)
         self.s1b_context_menu.add_command(label="重置为原标题（取消优化）", command=self._s1b_reset_to_original)
-
         self.s1b_context_menu.add_separator()
-
         self.s1b_ctx_vision_idx = self.s1b_context_menu.index("end") + 1
         self.s1b_context_menu.add_command(label="需要视觉识别: -", command=self._s1b_toggle_needs_vision)
         self.s1b_ctx_audio_idx = self.s1b_context_menu.index("end") + 1
         self.s1b_context_menu.add_command(label="音频已识别: -", command=self._s1b_toggle_audio_recognized)
-
         self.s1b_context_menu.add_separator()
-
         self.s1b_context_menu.add_command(label="删除选中行", command=self._s1b_delete)
 
         self.s1b_tree.bind("<Button-3>", self._s1b_show_context_menu)
@@ -147,16 +158,44 @@ class StageRefineTab(ttk.Frame):
         for item in self.s1b_tree.get_children():
             values = self.s1b_tree.item(item, "values")
             if not query:
-                # 显示所有行
                 self.s1b_tree.reattach(item, "", "end")
             else:
-                # 搜索 original_title 和 final_name
                 original = str(values[0]).lower() if values[0] else ""
                 refined = str(values[3]).lower() if len(values) > 3 and values[3] else ""
                 if query in original or query in refined:
                     self.s1b_tree.reattach(item, "", "end")
                 else:
                     self.s1b_tree.detach(item)
+
+    # ==================== 过滤 ====================
+
+    def _on_filter_modified(self):
+        """只显示已修改的行"""
+        show_modified_only = self.s1b_show_modified_var.get()
+        for item in self.s1b_tree.get_children():
+            if show_modified_only:
+                if item in self.s1b_modified:
+                    self.s1b_tree.reattach(item, "", "end")
+                else:
+                    self.s1b_tree.detach(item)
+            else:
+                self.s1b_tree.reattach(item, "", "end")
+
+    def _update_modified_counter(self):
+        """更新修改计数器"""
+        total = len(self.s1b_tree.get_children())
+        modified = len(self.s1b_modified)
+        self.s1b_modified_label.configure(text=f"已修改 {modified}/{total}")
+
+    # ==================== 智能操作 ====================
+
+    def _s1b_fill_original_smart(self):
+        """智能填入原标题：有选中行时操作选中行，无选中时操作全部"""
+        selected = self.s1b_tree.selection()
+        if selected:
+            self._s1b_fill_original_selected()
+        else:
+            self._s1b_fill_original_all()
 
     # ==================== 浏览 ====================
 
@@ -212,6 +251,7 @@ class StageRefineTab(ttk.Frame):
 
             filter_desc = "（已过滤needs_vision=TRUE）" if filter_vision else ""
             print(f"[完成] 加载 {loaded_count} 条记录{filter_desc}")
+            self._update_modified_counter()
 
         except Exception as e:
             print(f"[错误] 加载CSV失败: {e}")
@@ -348,6 +388,7 @@ class StageRefineTab(ttk.Frame):
     def _mark_modified(self, item_id):
         self.s1b_modified.add(item_id)
         self.s1b_tree.item(item_id, tags=("modified",))
+        self._update_modified_counter()
 
     def _s1b_show_context_menu(self, event):
         item = self.s1b_tree.identify_row(event.y)
@@ -627,6 +668,7 @@ class StageRefineTab(ttk.Frame):
             self.s1b_modified.clear()
             for item_id in self.s1b_tree.get_children():
                 self.s1b_tree.item(item_id, tags=())
+            self._update_modified_counter()
 
             print(f"[完成] 已更新 {updated} 条记录")
             messagebox.showinfo("完成", f"已更新 {updated} 条记录")
