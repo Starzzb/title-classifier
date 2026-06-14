@@ -35,38 +35,40 @@ class StageRefineTab(ttk.Frame):
         self._build_ui()
 
     def _build_ui(self):
-        # ===== 第一行：操作栏 =====
-        toolbar = ttk.Frame(self)
-        toolbar.pack(fill=tk.X, padx=4, pady=(4, 2))
+        # ===== 第一行：文件 + Provider =====
+        file_bar = ttk.Frame(self)
+        file_bar.pack(fill=tk.X, padx=4, pady=(4, 2))
 
-        # CSV 文件选择
-        ttk.Label(toolbar, text="CSV:").pack(side=tk.LEFT, padx=(0, 2))
-        csv_entry = ttk.Entry(toolbar, textvariable=self.s1b_csv_var, width=35)
-        csv_entry.pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="浏览", width=5, command=self._browse_csv_s1b).pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="加载", width=5, command=self._load_s1b_preview).pack(side=tk.LEFT, padx=2)
+        ttk.Label(file_bar, text="CSV:").pack(side=tk.LEFT, padx=(0, 2))
+        ttk.Entry(file_bar, textvariable=self.s1b_csv_var, width=30).pack(side=tk.LEFT, padx=2)
+        ttk.Button(file_bar, text="浏览", width=5, command=self._browse_csv_s1b).pack(side=tk.LEFT, padx=2)
+        ttk.Button(file_bar, text="加载", width=5, command=self._load_s1b_preview).pack(side=tk.LEFT, padx=2)
 
-        ttk.Separator(toolbar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
+        ttk.Separator(file_bar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
 
-        # Provider
-        ttk.Label(toolbar, text="AI:").pack(side=tk.LEFT, padx=(0, 2))
+        ttk.Label(file_bar, text="AI:").pack(side=tk.LEFT, padx=(0, 2))
         providers = get_providers_for_gui("1b")
-        ttk.Combobox(toolbar, textvariable=self.s1b_provider_var, values=providers, state="readonly", width=8).pack(side=tk.LEFT, padx=2)
+        ttk.Combobox(file_bar, textvariable=self.s1b_provider_var, values=providers, state="readonly", width=8).pack(side=tk.LEFT, padx=2)
 
-        ttk.Separator(toolbar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
+        # 修改计数器（右侧）
+        self.s1b_modified_label = ttk.Label(file_bar, text="已修改 0/0", foreground="#888888")
+        self.s1b_modified_label.pack(side=tk.RIGHT, padx=8)
 
-        # 核心操作按钮
-        ttk.Button(toolbar, text="AI优化选中", command=self._run_refine_selected).pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="AI优化全部", command=self._run_refine_all).pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="填入原标题", command=self._s1b_fill_original_smart).pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="编辑", width=4, command=self._s1b_edit).pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="删除", width=4, command=self._s1b_delete).pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="确认写入", command=self._confirm_s1b_results).pack(side=tk.LEFT, padx=2)
+        # ===== 第二行：操作按钮 =====
+        btn_bar = ttk.Frame(self)
+        btn_bar.pack(fill=tk.X, padx=4, pady=(0, 2))
 
-        ttk.Separator(toolbar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
+        ttk.Button(btn_bar, text="AI优化选中", command=self._run_refine_selected).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_bar, text="AI优化全部", command=self._run_refine_all).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_bar, text="填入原标题", command=self._s1b_fill_original_smart).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_bar, text="编辑", width=4, command=self._s1b_edit).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_bar, text="删除", width=4, command=self._s1b_delete).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_bar, text="确认写入", command=self._confirm_s1b_results).pack(side=tk.LEFT, padx=2)
+
+        ttk.Separator(btn_bar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
 
         # 批量操作下拉
-        more_btn = ttk.Menubutton(toolbar, text="批量 ▾")
+        more_btn = ttk.Menubutton(btn_bar, text="批量 ▾")
         more_btn.pack(side=tk.LEFT, padx=2)
         more_menu = tk.Menu(more_btn, tearoff=0)
         more_btn["menu"] = more_menu
@@ -77,10 +79,6 @@ class StageRefineTab(ttk.Frame):
         more_menu.add_command(label="选中行→反选", command=lambda: self._s1b_batch_needs_vision("INVERT"))
         more_menu.add_separator()
         more_menu.add_command(label="重置为原标题(选中)", command=self._s1b_reset_to_original)
-
-        # 修改计数器（右侧）
-        self.s1b_modified_label = ttk.Label(toolbar, text="已修改 0/0", foreground="#888888")
-        self.s1b_modified_label.pack(side=tk.RIGHT, padx=8)
 
         # ===== 第二行：辅助栏 =====
         aux_bar = ttk.Frame(self)
