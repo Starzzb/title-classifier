@@ -62,11 +62,32 @@ class CollapsibleFrame(ttk.Frame):
         if expanded:
             self._content.pack(fill=BOTH, expand=True)
 
+        # 绑定鼠标滚轮事件到所有子组件
+        self._bind_mousewheel_recursive(self)
+
+    def _bind_mousewheel_recursive(self, widget):
+        """递归绑定鼠标滚轮事件"""
+        widget.bind("<MouseWheel>", self._on_mousewheel)
+        for child in widget.winfo_children():
+            self._bind_mousewheel_recursive(child)
+
+    def _on_mousewheel(self, event):
+        """处理鼠标滚轮事件"""
+        # 查找父级的 right_scroll_canvas
+        parent = self.master
+        while parent:
+            if hasattr(parent, '_right_mousewheel'):
+                parent._right_mousewheel(event)
+                break
+            parent = parent.master if hasattr(parent, 'master') else None
+
     def toggle(self):
         self._expanded = not self._expanded
         if self._expanded:
             self._content.pack(fill=BOTH, expand=True)
             self._toggle_btn.configure(text=f"▼ {self._text}")
+            # 重新绑定鼠标滚轮
+            self._bind_mousewheel_recursive(self)
         else:
             self._content.pack_forget()
             self._toggle_btn.configure(text=f"▶ {self._text}")
@@ -248,6 +269,9 @@ class DebugWindow(ttk.Toplevel):
                 pass
         right_scroll_canvas.bind("<MouseWheel>", _right_mousewheel)
         right_inner.bind("<MouseWheel>", lambda e: _right_mousewheel(e))
+
+        # 保存右栏滚动函数供子组件使用
+        self._right_mousewheel = _right_mousewheel
 
         # 右栏内容：检测结果（展开）
         sec_detection = CollapsibleFrame(right_inner, text="检测结果", expanded=True)

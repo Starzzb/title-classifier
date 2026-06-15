@@ -84,11 +84,17 @@ class StageVisionTab(ttk.Frame):
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
         def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            try:
+                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except tk.TclError:
+                pass
         def _bind_mousewheel(event):
             canvas.bind_all("<MouseWheel>", _on_mousewheel)
         def _unbind_mousewheel(event):
-            canvas.unbind_all("<MouseWheel>")
+            try:
+                canvas.unbind_all("<MouseWheel>")
+            except tk.TclError:
+                pass
         canvas.bind("<Enter>", _bind_mousewheel)
         canvas.bind("<Leave>", _unbind_mousewheel)
 
@@ -183,7 +189,7 @@ class StageVisionTab(ttk.Frame):
         row2 = ttk.Frame(parent)
         row2.pack(fill=tk.X, padx=4, pady=2)
         ttk.Label(row2, text="YOLO置信度:").pack(side=tk.LEFT, padx=4)
-        self.s1c_yolo_conf_var = tk.StringVar(value="0.4")
+        self.s1c_yolo_conf_var = tk.StringVar(value="0.5")
         ttk.Entry(row2, textvariable=self.s1c_yolo_conf_var, width=6).pack(side=tk.LEFT, padx=4)
 
         row3 = ttk.Frame(parent)
@@ -292,7 +298,7 @@ class StageVisionTab(ttk.Frame):
 
         # YOLO置信度（校验范围）
         yolo_conf = self.s1c_yolo_conf_var.get()
-        if yolo_conf and yolo_conf != "0.4":
+        if yolo_conf and yolo_conf != "0.5":
             try:
                 conf_val = float(yolo_conf)
                 if not (0.1 <= conf_val <= 0.9):
@@ -379,7 +385,7 @@ class StageVisionTab(ttk.Frame):
 
         # YOLO置信度（校验范围）
         yolo_conf = self.s1c_yolo_conf_var.get()
-        if yolo_conf and yolo_conf != "0.4":
+        if yolo_conf and yolo_conf != "0.5":
             try:
                 conf_val = float(yolo_conf)
                 if not (0.1 <= conf_val <= 0.9):

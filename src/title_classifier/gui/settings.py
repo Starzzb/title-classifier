@@ -37,6 +37,9 @@ class SettingsDialog(ttk.Toplevel):
         self._build_ui()
         self._load_values()
 
+        # 窗口关闭时清理
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
         # 居中到父窗口
         self.update_idletasks()
         px = parent.winfo_rootx() + (parent.winfo_width() - self.winfo_width()) // 2
@@ -65,6 +68,10 @@ class SettingsDialog(ttk.Toplevel):
         self.vlm_timeout_var = tk.StringVar()
         self.vlm_retry_var = tk.StringVar()
 
+        # 标题优化
+        self.refiner_batch_size_var = tk.StringVar()
+        self.refiner_max_workers_var = tk.StringVar()
+
     def _build_ui(self):
         """构建UI"""
         main_frame = ttk.Frame(self)
@@ -87,10 +94,14 @@ class SettingsDialog(ttk.Toplevel):
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # 鼠标滚轮
+        # 鼠标滚轮（只在鼠标悬停在canvas上时生效）
         def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+            try:
+                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except tk.TclError:
+                pass
+        canvas.bind("<MouseWheel>", _on_mousewheel)
+        scroll_frame.bind("<MouseWheel>", _on_mousewheel)
 
         # 外观
         self._build_appearance_section(scroll_frame)
@@ -103,6 +114,9 @@ class SettingsDialog(ttk.Toplevel):
 
         # 全局参数
         self._build_global_section(scroll_frame)
+
+        # 标题优化配置
+        self._build_refiner_section(scroll_frame)
 
         # 底部按钮
         btn_frame = ttk.Frame(self)
@@ -205,6 +219,23 @@ class SettingsDialog(ttk.Toplevel):
         ttk.Label(row3, text="VLM重试次数:", width=14).pack(side=tk.LEFT)
         ttk.Entry(row3, textvariable=self.vlm_retry_var, width=6).pack(side=tk.LEFT, padx=4)
 
+    def _build_refiner_section(self, parent):
+        """标题优化配置区块"""
+        frame = ttk.LabelFrame(parent, text="标题优化")
+        frame.pack(fill=tk.X, pady=(0, 10), padx=10)
+
+        row1 = ttk.Frame(frame)
+        row1.pack(fill=tk.X, pady=2)
+        ttk.Label(row1, text="批量大小:", width=14).pack(side=tk.LEFT)
+        ttk.Entry(row1, textvariable=self.refiner_batch_size_var, width=6).pack(side=tk.LEFT, padx=4)
+        ttk.Label(row1, text="条/批（建议5-15，越小越准确）", foreground="#888888").pack(side=tk.LEFT)
+
+        row2 = ttk.Frame(frame)
+        row2.pack(fill=tk.X, pady=2)
+        ttk.Label(row2, text="并发批次数:", width=14).pack(side=tk.LEFT)
+        ttk.Entry(row2, textvariable=self.refiner_max_workers_var, width=6).pack(side=tk.LEFT, padx=4)
+        ttk.Label(row2, text="（建议1-5）", foreground="#888888").pack(side=tk.LEFT)
+
     def _load_values(self):
         """从配置加载当前值"""
         c = self.config
@@ -228,6 +259,10 @@ class SettingsDialog(ttk.Toplevel):
         self.max_image_size_var.set(str(get_config_value(c, "vision.max_image_size", 1200)))
         self.vlm_timeout_var.set(str(get_config_value(c, "providers.timeout", 120)))
         self.vlm_retry_var.set(str(get_config_value(c, "vision.vlm_retry_count", 1)))
+
+        # 标题优化
+        self.refiner_batch_size_var.set(str(get_config_value(c, "refiner.batch_size", 10)))
+        self.refiner_max_workers_var.set(str(get_config_value(c, "refiner.max_workers", 3)))
 
     def _save(self):
         """保存到 user.toml"""
@@ -254,6 +289,10 @@ class SettingsDialog(ttk.Toplevel):
                 "max_image_size": int(self.max_image_size_var.get() or 1200),
                 "vlm_retry_count": int(self.vlm_retry_var.get() or 1),
             },
+            "refiner": {
+                "batch_size": int(self.refiner_batch_size_var.get() or 10),
+                "max_workers": int(self.refiner_max_workers_var.get() or 3),
+            },
         }
 
         if save_user_config(updates):
@@ -270,6 +309,15 @@ class SettingsDialog(ttk.Toplevel):
             self.destroy()
         else:
             messagebox.showerror("保存失败", "无法保存设置，请检查文件权限", parent=self)
+
+    def _on_close(self):
+        """窗口关闭时清理"""
+        # 解绑全局事件
+        try:
+            self.unbind_all("<MouseWheel>")
+        except Exception:
+            pass
+        self.destroy()
 
     def _reset_defaults(self):
         """恢复默认值"""

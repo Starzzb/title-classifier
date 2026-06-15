@@ -44,9 +44,9 @@ hw_accel = "auto"
 batch_extract = true
 
 [yolo]
-model_type = "detect"
-confidence = 0.4
-backend = "auto"
+model_type = "pose"
+confidence = 0.5
+backend = "openvino"
 
 [yolo.openvino]
 precision = "FP16"
@@ -64,9 +64,9 @@ weight_strategy = "confidence_based"
 fallback_on_error = true
 
 [yolo.comprehensive.custom_weights]
-detect = 0.33
-pose = 0.34
-segment = 0.33
+detect = 0.25
+pose = 0.50
+segment = 0.25
 
 [clip]
 threshold = 0.25
@@ -123,6 +123,10 @@ format_text = true
 use_rclone = false
 rclone_path = "rclone"
 max_workers = 5
+
+[refiner]
+batch_size = 10
+max_workers = 3
 
 [mux]
 enabled = false

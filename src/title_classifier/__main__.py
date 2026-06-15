@@ -600,7 +600,7 @@ def main():
     vision_cmd.add_argument("-p", "--provider", default="gcli", help="AI Provider")
     vision_cmd.add_argument("--use-yolo", action="store_true", help="使用YOLO姿态检测（分析人体姿态，智能选择代表性帧）")
     vision_cmd.add_argument("--comprehensive", action="store_true", help="全面分析模式（使用detect/pose/segment三个模型，投票决策）")
-    vision_cmd.add_argument("--yolo-conf", type=float, default=0.4, help="YOLO置信度阈值")
+    vision_cmd.add_argument("--yolo-conf", type=float, default=0.5, help="YOLO置信度阈值")
     vision_cmd.add_argument("--use-clip", action="store_true", help="使用CLIP预分类")
     vision_cmd.add_argument("--clip-threshold", type=float, default=0.25, help="CLIP置信度阈值")
     vision_cmd.add_argument("--max-image-size", type=int, default=640, help="图片最大尺寸")
@@ -609,7 +609,7 @@ def main():
     vision_cmd.add_argument("--max-sample-frames", type=int, default=50, help="最大采样帧数上限（默认50，超过此数会均匀分布到整个视频）")
     vision_cmd.add_argument("--device", default="cpu", choices=["auto", "cuda", "cpu"], help="推理设备（cpu=默认, auto=自动检测, cuda=GPU需手动安装CUDA版PyTorch）")
     vision_cmd.add_argument("--concurrent", type=int, default=4, help="并发处理视频数（默认4，CPU多核并行）")
-    vision_cmd.add_argument("--backend", default="auto", choices=["auto", "openvino", "pytorch"], help="YOLO推理后端（auto=自动检测, openvino=Intel/AMD CPU加速, pytorch=原始PyTorch）")
+    vision_cmd.add_argument("--backend", default="openvino", choices=["auto", "openvino", "pytorch"], help="YOLO推理后端（auto=自动检测, openvino=Intel/AMD CPU加速, pytorch=原始PyTorch）")
     vision_cmd.add_argument("--no-motion-detection", action="store_true", help="禁用运动检测前置过滤（默认启用）")
     vision_cmd.add_argument("--motion-threshold", type=float, default=5.0, help="运动检测阈值（变化像素比例%%，低于此值跳过YOLO推理，默认5.0）")
 

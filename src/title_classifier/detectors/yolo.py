@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 YOLO_MODEL_DIR = Path(__file__).parent.parent.parent.parent / "models" / "yolo"
 YOLO_MODELS = {
     "detect": YOLO_MODEL_DIR / "yolov8n.pt",
-    "pose": YOLO_MODEL_DIR / "yolov8s-pose.pt",
+    "pose": YOLO_MODEL_DIR / "yolo11m-pose.pt",
     "segment": YOLO_MODEL_DIR / "yolov8n-seg.pt",
 }
 
@@ -158,7 +158,7 @@ class YOLODetector(BaseDetector):
             raise
 
     def load_model(self) -> bool:
-        """加载YOLO模型 - 优先 OpenVINO，回退 PyTorch"""
+        """加载YOLO模型 - 支持 OpenVINO/ONNX Runtime/PyTorch"""
         if self._loaded:
             return True
 
@@ -243,8 +243,8 @@ class YOLODetector(BaseDetector):
                 return {"has_person": False, "persons": [], "max_confidence": 0.0}
 
         # 优先使用detect模型，如果没有则使用pose模型
-        model_type = "detect" if "detect" in self._models else "pose"
-        if model_type not in self._models:
+        model_type = "detect" if "detect" in self._backend_type else "pose"
+        if model_type not in self._backend_type:
             logger.error("没有可用的检测模型")
             return {"has_person": False, "persons": [], "max_confidence": 0.0}
 
@@ -302,7 +302,7 @@ class YOLODetector(BaseDetector):
             if not self.load_model():
                 return {"has_person": False, "poses": [], "max_confidence": 0.0}
 
-        if "pose" not in self._models:
+        if "pose" not in self._backend_type:
             logger.error("pose模型未加载")
             return {"has_person": False, "poses": [], "max_confidence": 0.0}
 

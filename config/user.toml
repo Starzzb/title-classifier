@@ -13,7 +13,7 @@ key = ""
 device = "auto"
 
 [yolo]
-backend = "auto"
+backend = "openvino"
 
 [vision]
 debug_dir = "data/debug"

@@ -7,13 +7,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from ..providers import call_text_api, get_provider_config, get_api_key
 from ..utils.prompt_loader import get_prompt
+from ..utils.config import load_merged_config, get_config_value
 
 logger = logging.getLogger(__name__)
 
-# 每批处理的标题数量（文本处理轻量，可以多放几条）
-BATCH_SIZE = 30
-# 最大并发批次数
-MAX_WORKERS = 3
+# 默认值（会被配置文件覆盖）
+DEFAULT_BATCH_SIZE = 10
+DEFAULT_MAX_WORKERS = 3
 
 
 class Refiner:
@@ -22,6 +22,10 @@ class Refiner:
     def __init__(self, provider: str = "gcli"):
         self.provider = provider
         self.config = get_provider_config(provider)
+        # 从配置文件读取批量大小和并发数
+        merged_config = load_merged_config()
+        self.batch_size = get_config_value(merged_config, "refiner.batch_size", DEFAULT_BATCH_SIZE)
+        self.max_workers = get_config_value(merged_config, "refiner.max_workers", DEFAULT_MAX_WORKERS)
 
     def refine_batch(
         self,
@@ -45,8 +49,8 @@ class Refiner:
 
         # 构建批次: [(batch_idx, batch_titles, start_index), ...]
         batches = []
-        for batch_start in range(0, total, BATCH_SIZE):
-            batch_end = min(batch_start + BATCH_SIZE, total)
+        for batch_start in range(0, total, self.batch_size):
+            batch_end = min(batch_start + self.batch_size, total)
             batches.append((batch_start, titles[batch_start:batch_end]))
 
         all_results: Dict[int, List[str]] = {}
@@ -56,7 +60,7 @@ class Refiner:
             result = self._refine_single_batch(batch_titles)
             return batch_start, result
 
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+        with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
             futures = {
                 pool.submit(process_one, bs, bt): bs
                 for bs, bt in batches
@@ -70,7 +74,7 @@ class Refiner:
                     completed += len(batch_results)
                     if progress_callback:
                         # 报告整体进度
-                        progress_callback(completed, total, f"批次 {batch_start // BATCH_SIZE + 1}")
+                        progress_callback(completed, total, f"批次 {batch_start // self.batch_size + 1}")
                 except Exception as e:
                     logger.error(f"批次 {bs} 失败: {e}")
                     batch_titles = [bt for b, bt in batches if b == bs][0]
