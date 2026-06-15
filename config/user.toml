@@ -1,0 +1,21 @@
+[theme]
+name = "darkly"
+font_size = 10
+
+[providers]
+default = "gcli"
+timeout = 90
+
+[api]
+key = ""
+
+[general]
+device = "auto"
+
+[yolo]
+backend = "openvino"
+
+[vision]
+debug_dir = "data/debug"
+max_image_size = 800
+vlm_retry_count = 1

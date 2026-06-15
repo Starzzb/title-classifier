@@ -24,7 +24,7 @@ def download_yolo_models():
     yolo_dir = MODELS_DIR / "yolo"
     yolo_dir.mkdir(parents=True, exist_ok=True)
 
-    models = ["yolov8n.pt", "yolov8n-pose.pt", "yolov8n-seg.pt"]
+    models = ["yolov8n.pt", "yolov8m-pose.pt", "yolov8n-seg.pt", "yolo11m-pose.pt"]
 
     try:
         from ultralytics import YOLO

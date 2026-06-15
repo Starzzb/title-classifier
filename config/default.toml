@@ -2,7 +2,7 @@
 output_dir = "data/output"
 log_dir = "data/logs"
 csv_filename = "title_review.csv"
-device = "auto"  # auto / cuda / cpu
+device = "auto"
 
 [scanner]
 video_extensions = [
@@ -36,20 +36,20 @@ keyframe_threshold = 30.0
 analysis_step = 2.0
 max_sample_frames = 50
 motion_detection = true
-motion_threshold = 5.0       # 变化像素比例阈值（%），低于此值认为是静止画面
-motion_min_interval = 5.0    # 最小强制推理间隔（秒），需大于采样间隔才能触发运动检测跳帧
+motion_threshold = 5.0
+motion_min_interval = 5.0
 
 [vision.decode]
-hw_accel = "auto"            # 硬件解码器: auto / d3d11va / qsv / vaapi / none
-batch_extract = true         # 批量提取帧（减少 ffmpeg 启动次数）
+hw_accel = "auto"
+batch_extract = true
 
 [yolo]
-model_type = "detect"
-confidence = 0.4
-backend = "auto"  # auto / openvino / pytorch
+model_type = "pose"
+confidence = 0.5
+backend = "openvino"
 
 [yolo.openvino]
-precision = "FP16"  # FP16 / INT8
+precision = "FP16"
 cache_dir = "models/yolo/openvino"
 
 [yolo.comprehensive]
@@ -64,9 +64,9 @@ weight_strategy = "confidence_based"
 fallback_on_error = true
 
 [yolo.comprehensive.custom_weights]
-detect = 0.33
-pose = 0.34
-segment = 0.33
+detect = 0.25
+pose = 0.50
+segment = 0.25
 
 [clip]
 threshold = 0.25
@@ -123,6 +123,10 @@ format_text = true
 use_rclone = false
 rclone_path = "rclone"
 max_workers = 5
+
+[refiner]
+batch_size = 10
+max_workers = 3
 
 [mux]
 enabled = false
