@@ -148,11 +148,15 @@ class APIConfigDialog(tk.Toplevel):
     def _build_provider_section(self, parent, provider_id: str, provider_info: Dict[str, Any]):
         """构建单个 provider 的配置区域"""
         # 框架
-        frame = ttk.LabelFrame(parent, text=provider_info.get("name", provider_id), padding=10)
+        frame = ttk.LabelFrame(parent, text=provider_info.get("name", provider_id))
         frame.pack(fill=tk.X, padx=5, pady=5)
 
+        # 内部框架用于 padding
+        inner_frame = ttk.Frame(frame, padding=10)
+        inner_frame.pack(fill=tk.X)
+
         # URL 输入
-        url_frame = ttk.Frame(frame)
+        url_frame = ttk.Frame(inner_frame)
         url_frame.pack(fill=tk.X, pady=2)
         ttk.Label(url_frame, text="URL:", width=10).pack(side=tk.LEFT)
 
@@ -165,7 +169,7 @@ class APIConfigDialog(tk.Toplevel):
         url_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
 
         # API Key 输入
-        key_frame = ttk.Frame(frame)
+        key_frame = ttk.Frame(inner_frame)
         key_frame.pack(fill=tk.X, pady=2)
         ttk.Label(key_frame, text="API Key:", width=10).pack(side=tk.LEFT)
 
@@ -187,7 +191,7 @@ class APIConfigDialog(tk.Toplevel):
         show_btn.pack(side=tk.LEFT)
 
         # 模型显示（只读）
-        model_frame = ttk.Frame(frame)
+        model_frame = ttk.Frame(inner_frame)
         model_frame.pack(fill=tk.X, pady=2)
         ttk.Label(model_frame, text="模型:", width=10).pack(side=tk.LEFT)
         ttk.Label(
@@ -199,7 +203,7 @@ class APIConfigDialog(tk.Toplevel):
         # 描述
         if provider_info.get("description"):
             ttk.Label(
-                frame,
+                inner_frame,
                 text=provider_info["description"],
                 foreground="#888888",
                 font=("Microsoft YaHei", 8)
