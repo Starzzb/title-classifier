@@ -177,6 +177,28 @@ class SettingsDialog(ttk.Toplevel):
         ttk.Label(row4, text="超时(秒):", width=12).pack(side=tk.LEFT)
         ttk.Entry(row4, textvariable=self.timeout_var, width=6).pack(side=tk.LEFT, padx=4)
 
+        # 高级配置按钮
+        row5 = ttk.Frame(frame)
+        row5.pack(fill=tk.X, pady=(10, 0))
+        ttk.Button(
+            row5,
+            text="高级 API 配置...",
+            command=self._open_api_config,
+            bootstyle=INFO
+        ).pack(side=tk.LEFT)
+
+        ttk.Label(
+            row5,
+            text="配置所有 Provider 的 URL 和 API Key",
+            foreground="#888888",
+            font=("Microsoft YaHei", 8)
+        ).pack(side=tk.LEFT, padx=10)
+
+    def _open_api_config(self):
+        """打开 API 配置对话框"""
+        from .api_config import APIConfigDialog
+        APIConfigDialog(self)
+
     def _build_inference_section(self, parent):
         """推理配置区块"""
         frame = ttk.LabelFrame(parent, text="推理配置")
