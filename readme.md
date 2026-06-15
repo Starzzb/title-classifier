@@ -45,7 +45,7 @@
 
 | 功能模块 | 特性描述 |
 |---------|---------|
-| **YOLO 视觉分析** | 集成 YOLOv8，支持检测、姿态估计、实例分割 |
+| **YOLO 视觉分析** | 集成 YOLO11/YOLOv8，支持检测、姿态估计、实例分割 |
 | **视频全面分析** | 每2秒采样，智能选择10帧代表性帧给VLM |
 | **姿态分析** | 17个关键点，识别跪姿、站立、坐姿等动作 |
 | **智能帧选择** | 基于姿态变化、置信度、关键点可见性选择最佳帧 |
@@ -124,41 +124,51 @@ uv run python scripts/download_yolo_models.py
 
 | 模型 | 大小 | 功能 | 说明 |
 |------|------|------|------|
+| `yolo11m-pose.pt` | 40MB | 姿态估计 | medium，**默认推荐**，精度+5-8% |
 | `yolov8n.pt` | 6MB | 人体检测 | nano，最快 |
-| `yolov8s-pose.pt` | 22MB | 姿态估计 | small，精度/速度均衡（推荐） |
+| `yolov8s-pose.pt` | 22MB | 姿态估计 | small，旧版默认 |
 | `yolov8n-seg.pt` | 7MB | 实例分割 | nano，最快 |
 
-> **模型选择**：默认使用 `yolov8s-pose`（small），精度比 nano 提升 ~3-5% mAP，CPU 推理 ~100ms/帧。
+> **模型选择**：默认使用 `yolo11m-pose`（medium），精度比 yolov8s 提升 ~5-8% mAP，CPU 推理 ~150ms/帧。
 > 如需更高速度，可改回 `yolov8n-pose`（6MB，~50ms/帧）。
 > 修改 `src/title_classifier/detectors/yolo.py` 中的 `YOLO_MODELS` 配置即可。
 
 #### 切换更高精度模型
 
-pose 模型支持 5 种精度等级，按需选择：
+pose 模型支持多种精度等级，按需选择：
+
+**YOLO11 系列（推荐）**：
+
+| 模型 | 大小 | CPU推理 | 精度 | 适用场景 |
+|------|------|---------|------|----------|
+| `yolo11n-pose.pt` | 6MB | ~80ms | 低 | 批量处理、速度优先 |
+| `yolo11s-pose.pt` | 20MB | ~120ms | 中 | 均衡选择 |
+| `yolo11m-pose.pt` | 40MB | ~150ms | 高 | **默认推荐** |
+| `yolo11l-pose.pt` | 85MB | ~300ms | 很高 | 高精度需求 |
+
+**YOLOv8 系列（旧版）**：
 
 | 模型 | 大小 | CPU推理 | 精度 | 适用场景 |
 |------|------|---------|------|----------|
 | `yolov8n-pose.pt` | 6.5MB | ~50ms | 低 | 批量处理、速度优先 |
-| `yolov8s-pose.pt` | 22MB | ~100ms | 中 | **默认，均衡** |
+| `yolov8s-pose.pt` | 22MB | ~100ms | 中 | 旧版默认 |
 | `yolov8m-pose.pt` | 52MB | ~200ms | 高 | 精度优先 |
-| `yolov8l-pose.pt` | 87MB | ~400ms | 很高 | 高精度需求 |
-| `yolov8x-pose.pt` | 136MB | ~600ms | 最高 | 最高精度，速度慢 |
 
 **切换步骤**：
 
 ```powershell
-# 1. 下载模型（以 medium 为例）
-cd models/yolo
-curl -L -o yolov8m-pose.pt "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolov8m-pose.pt"
+# 1. 下载模型（以 yolo11m-pose 为例）
+uv run python -c "from ultralytics import YOLO; YOLO('yolo11m-pose.pt')"
+mv yolo11m-pose.pt models/yolo/
 
 # 2. 修改配置
-# 编辑 src/title_classifier/detectors/yolo.py 第 18 行：
+# 编辑 src/title_classifier/detectors/yolo.py 第 19 行：
 #   "pose": YOLO_MODEL_DIR / "yolov8s-pose.pt",
 # 改为：
-#   "pose": YOLO_MODEL_DIR / "yolov8m-pose.pt",
+#   "pose": YOLO_MODEL_DIR / "yolo11m-pose.pt",
 ```
 
-> **注意**：detect 和 segment 模型也支持同样切换（`yolov8n` → `yolov8s` → `yolov8m` → `yolov8l` → `yolov8x`），下载对应文件并修改 `YOLO_MODELS` 配置即可。
+> **注意**：detect 和 segment 模型也支持同样切换，下载对应文件并修改 `YOLO_MODELS` 配置即可。
 
 **CLIP 模型**（可选，用于图像预分类）：
 
@@ -395,7 +405,7 @@ min_speech_ratio = 0.3   # 最小语音占比
 
 ### 功能说明
 
-YOLOv8 是一个多功能视觉分析模型，支持：
+YOLO11/YOLOv8 是多功能视觉分析模型，支持：
 
 1. **目标检测**（detect）：检测人体位置和边界框
 2. **姿态估计**（pose）：17个关键点，识别动作姿态
@@ -614,11 +624,14 @@ uv run title-classifier vision --use-yolo -p gcli
 #### 指定后端
 
 ```powershell
-# 强制使用 OpenVINO
+# 强制使用 OpenVINO（默认）
 uv run title-classifier vision --use-yolo --backend openvino -p gcli
 
 # 强制使用 PyTorch
 uv run title-classifier vision --use-yolo --backend pytorch -p gcli
+
+# 自动检测后端
+uv run title-classifier vision --use-yolo --backend auto -p gcli
 ```
 
 #### 配置文件
@@ -627,7 +640,9 @@ uv run title-classifier vision --use-yolo --backend pytorch -p gcli
 
 ```toml
 [yolo]
-backend = "auto"  # auto / openvino / pytorch
+model_type = "pose"      # detect / pose / segment
+confidence = 0.5         # 置信度阈值（0.1-0.9）
+backend = "openvino"     # auto / openvino / pytorch
 
 [yolo.openvino]
 precision = "FP16"  # FP16 / INT8
@@ -1890,6 +1905,28 @@ uv run title-classifier vision --all -p gcli
 - 新增 `[audio.vad]` 配置节
 - 新增 `[audio.postprocess]` 配置节
 - 移除旧的 `[audio.adaptive]` 配置节（已被VAD策略替代）
+
+### v8.2.0 (最新)
+
+**重大更新：YOLO11m-pose 升级**
+- 默认模型从 yolov8s-pose 升级到 yolo11m-pose，精度提升 5-8%
+- 默认后端从 auto 改为 openvino，更稳定
+- 默认置信度从 0.4 提高到 0.5
+
+**重大更新：标题优化批量配置**
+- 新增 `[refiner]` 配置节，支持配置批量大小和并发数
+- 默认 batch_size=10，减少 AI 标题丢失
+- 优化提示词，强调保留重要信息和博主名
+
+**重大更新：GUI 设置页面增强**
+- 新增标题优化配置区块
+- 可配置批量大小和并发批次数
+- 修复鼠标滚动失效问题
+
+**重大更新：代码清理**
+- 移除 ONNX Runtime 相关代码，简化后端选择
+- 修复设置页面关闭时报错问题
+- 更新文档，反映最新配置
 
 ### v6.0.0
 
