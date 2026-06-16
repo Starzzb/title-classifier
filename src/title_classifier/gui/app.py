@@ -283,6 +283,7 @@ class TitleClassifierApp(ttk.Window):
         tools_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="工具", menu=tools_menu)
         tools_menu.add_command(label="设置...", command=self._open_settings)
+        tools_menu.add_command(label="模型管理...", command=self._open_model_manager)
 
     def _switch_theme(self, theme_name: str):
         """切换主题"""
@@ -310,6 +311,14 @@ class TitleClassifierApp(ttk.Window):
             SettingsDialog(self, self.ctx)
         except ImportError:
             print("[信息] 设置对话框尚未实现")
+
+    def _open_model_manager(self):
+        """打开模型管理对话框"""
+        try:
+            from .model_manager import ModelManagerDialog
+            ModelManagerDialog(self)
+        except ImportError as e:
+            print(f"[错误] 模型管理对话框加载失败: {e}")
 
     def _on_tab_changed(self, event=None):
         """切换标签页时更新状态栏"""
