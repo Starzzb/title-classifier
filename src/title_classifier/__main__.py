@@ -16,8 +16,25 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-from .core import Scanner, Refiner, VisionProcessor, Renamer
-from .utils.file_resolve import resolve_media_path
+
+def _import_core():
+    """延迟导入核心模块（支持打包模式）"""
+    try:
+        from .core import Scanner, Refiner, VisionProcessor, Renamer
+        from .utils.file_resolve import resolve_media_path
+    except ImportError:
+        from title_classifier.core import Scanner, Refiner, VisionProcessor, Renamer
+        from title_classifier.utils.file_resolve import resolve_media_path
+    return Scanner, Refiner, VisionProcessor, Renamer, resolve_media_path
+
+
+def _import_atomic_csv():
+    """延迟导入 atomic_csv 模块（支持打包模式）"""
+    try:
+        from .utils.atomic_csv import atomic_write_csv, atomic_append_csv
+    except ImportError:
+        from title_classifier.utils.atomic_csv import atomic_write_csv, atomic_append_csv
+    return atomic_write_csv, atomic_append_csv
 
 
 def setup_logging(verbose: bool = False, log_file: str = None):
@@ -51,6 +68,7 @@ def load_env(env_path: Path):
 
 def cmd_scan(args):
     """扫描命令"""
+    Scanner, _, _, _, _ = _import_core()
     scanner = Scanner(output_dir=args.output_dir)
     output = scanner.scan(
         target_dir=args.dir,
@@ -65,6 +83,7 @@ def cmd_scan(args):
 
 def cmd_refine(args):
     """优化命令"""
+    _, Refiner, _, _, _ = _import_core()
     refiner = Refiner(provider=args.provider)
     # TODO: 实现CSV读取和批量优化
     print("[待实现] AI标题优化")
@@ -73,6 +92,8 @@ def cmd_refine(args):
 def cmd_vision(args):
     """视觉识别命令"""
     import time
+
+    _, _, VisionProcessor, _, resolve_media_path = _import_core()
 
     csv_path = Path(args.csv)
     if not csv_path.exists():
@@ -232,7 +253,7 @@ def cmd_vision(args):
                     rows[row_idx]["vision_failed"] = "true"
                     print(f"  [错误] {result['error']}")
                     # 保存失败标记到CSV
-                    from .utils.atomic_csv import atomic_write_csv
+                    atomic_write_csv, _ = _import_atomic_csv()
                     atomic_write_csv(csv_path, rows, fieldnames)
                 return
 
@@ -268,7 +289,7 @@ def cmd_vision(args):
                     print(f"  [调试] 数据已保存: {result['debug_dir']}")
 
                 # 每处理完一条立即保存CSV
-                from .utils.atomic_csv import atomic_write_csv
+                atomic_write_csv, _ = _import_atomic_csv()
                 atomic_write_csv(csv_path, rows, fieldnames)
 
         except Exception as e:
@@ -304,8 +325,13 @@ def cmd_vision(args):
 
 def cmd_rename(args):
     """重命名命令"""
+    _, _, _, Renamer, _ = _import_core()
+
     # 读取配置
-    from .utils.config import load_config
+    try:
+        from .utils.config import load_config
+    except ImportError:
+        from title_classifier.utils.config import load_config
     config = load_config()
     renamer_config = config.get("renamer", {})
 
@@ -337,7 +363,13 @@ def cmd_rename(args):
 def cmd_audio(args):
     """音频识别命令"""
     import time
-    from .utils.audio import AudioProcessor, load_audio_config
+
+    _, _, _, _, resolve_media_path = _import_core()
+
+    try:
+        from .utils.audio import AudioProcessor, load_audio_config
+    except ImportError:
+        from title_classifier.utils.audio import AudioProcessor, load_audio_config
 
     csv_path = Path(args.csv)
     if not csv_path.exists():
@@ -453,7 +485,7 @@ def cmd_audio(args):
             failed += 1
 
         # 每处理完一条立即保存CSV（原子化写入）
-        from .utils.atomic_csv import atomic_write_csv
+        atomic_write_csv, _ = _import_atomic_csv()
         atomic_write_csv(csv_path, rows, fieldnames)
 
     print(f"\n[统计]")
@@ -465,7 +497,10 @@ def cmd_audio(args):
 def cmd_gui(args):
     """GUI命令"""
     try:
-        from .gui.app import main as gui_main
+        try:
+            from .gui.app import main as gui_main
+        except ImportError:
+            from title_classifier.gui.app import main as gui_main
         gui_main()
     except ImportError as e:
         print(f"[错误] GUI模块加载失败: {e}")
@@ -477,7 +512,10 @@ def cmd_db(args):
     from pathlib import Path
 
     db_path = str(Path("data/media.db"))
-    from .core.db_store import MediaDB
+    try:
+        from .core.db_store import MediaDB
+    except ImportError:
+        from title_classifier.core.db_store import MediaDB
     db = MediaDB(db_path)
 
     action = getattr(args, "db_action", None)
@@ -577,7 +615,8 @@ def main():
     # 如果是打包后的可执行文件，直接启动 GUI
     if is_packaged():
         try:
-            from .gui.app import main as gui_main
+            # 打包模式使用绝对导入
+            from title_classifier.gui.app import main as gui_main
             gui_main()
         except Exception as e:
             print(f"[错误] GUI 启动失败: {e}")
