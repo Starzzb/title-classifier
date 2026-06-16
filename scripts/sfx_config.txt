@@ -1,0 +1,7 @@
+;!@Install@!UTF-8!
+Title="Title Classifier v8.1.0"
+BeginPrompt="Do you want to install Title Classifier?"
+RunProgram="%%T\title-classifier.exe"
+Directory="%%S\title-classifier"
+ExecuteFile="%%T\title-classifier.exe"
+;!@InstallEnd@!
