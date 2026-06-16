@@ -2,6 +2,7 @@
 
 import sqlite3
 import shutil
+import sys
 import logging
 from pathlib import Path
 from datetime import datetime
@@ -9,7 +10,18 @@ from typing import Optional, List, Dict
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_PATH = Path(__file__).parent / "db_schema.sql"
+
+def _get_schema_path() -> Path:
+    """获取 db_schema.sql 路径（支持打包模式）"""
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        # PyInstaller 打包模式
+        return Path(sys._MEIPASS) / "title_classifier" / "core" / "db_schema.sql"
+    else:
+        # 开发模式
+        return Path(__file__).parent / "db_schema.sql"
+
+
+SCHEMA_PATH = _get_schema_path()
 
 
 def _get_db_path():

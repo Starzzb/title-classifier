@@ -18,6 +18,7 @@ GUI_ENTRY = PROJECT_DIR / "src" / "title_classifier" / "__main__.py"
 # 需要包含的数据文件
 DATA_FILES = [
     ("src/title_classifier/gui/assets", "title_classifier/gui/assets"),
+    ("src/title_classifier/core/db_schema.sql", "title_classifier/core"),
     ("models/yolo", "models/yolo"),
     ("config", "config"),
 ]
