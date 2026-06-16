@@ -567,8 +567,25 @@ def cmd_db(args):
     db.close()
 
 
+def is_packaged() -> bool:
+    """检测是否为 PyInstaller 打包后的可执行文件"""
+    return getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS')
+
+
 def main():
     """主函数"""
+    # 如果是打包后的可执行文件，直接启动 GUI
+    if is_packaged():
+        try:
+            from .gui.app import main as gui_main
+            gui_main()
+        except Exception as e:
+            print(f"[错误] GUI 启动失败: {e}")
+            import traceback
+            traceback.print_exc()
+            input("按 Enter 键退出...")
+        return
+
     parser = argparse.ArgumentParser(
         prog="title-classifier",
         description="视频标题分类和重命名工具",

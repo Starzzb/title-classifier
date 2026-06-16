@@ -12,9 +12,8 @@ DIST_DIR = PROJECT_DIR / "dist"
 BUILD_DIR = PROJECT_DIR / "build"
 SPEC_FILE = PROJECT_DIR / "title-classifier.spec"
 
-# 入口文件
-GUI_ENTRY = PROJECT_DIR / "src" / "title_classifier" / "gui" / "app.py"
-CLI_ENTRY = PROJECT_DIR / "src" / "title_classifier" / "__main__.py"
+# 入口文件（使用 __main__.py 作为入口，支持相对导入）
+GUI_ENTRY = PROJECT_DIR / "src" / "title_classifier" / "__main__.py"
 
 # 需要包含的数据文件
 DATA_FILES = [
@@ -101,7 +100,7 @@ def create_spec_file():
 block_cipher = None
 
 a = Analysis(
-    ['src/title_classifier/gui/app.py'],
+    ['src/title_classifier/__main__.py'],
     pathex=['src'],
     binaries=[],
     datas=[
