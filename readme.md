@@ -232,6 +232,33 @@ uv run title-classifier gui
 
 ## CLI命令详解
 
+### 全局参数
+
+| 参数 | 说明 |
+|------|------|
+| `-v, --verbose` | 详细输出（控制台显示 DEBUG 级别日志） |
+| `--log` | 日志文件路径（不指定则自动输出到 `logs/<日期>/` 目录） |
+
+**日志系统：**
+- 控制台默认输出 INFO 级别，`--verbose` 时输出 DEBUG 级别
+- 日志文件始终记录 DEBUG 级别，按天分目录存储在 `logs/<日期>/` 下
+- 文件名格式：`HHMMSS.log`
+
+**耗时追踪（视觉识别）：**
+```
+处理完成: 总耗时=12.35s | YOLO=4.20s(38帧推理,12帧跳过) | CLIP=1.52s | 帧选择=0.008s | VLM=5.71s
+```
+
+**模型详情日志（DEBUG 级别）：**
+```
+[YOLO] detect: 1人, 置信度=0.923, 耗时=0.085s
+[YOLO] pose: 关键点=15/17, 姿态=['站立'], 耗时=0.120s
+[YOLO] segment: mask=0.318, 色彩变化=45.2, 耗时=0.095s
+[CLIP] 分类完成: 耗时=0.235s | 穿着=黑色丝袜(0.723), 动作=坐姿(0.851), 发型=长发(0.912)
+[CLIP] 差异度计算: 50帧, 编码=1.20s, 计算=0.015s, 总计=1.22s | 分数: min=0.012, max=0.823, avg=0.156
+Vision API调用成功: provider=siliconflow, model=Qwen/Qwen3.6-35B-A3B, 耗时=5.71s, tokens=1234+567=1801, 响应长度=256
+```
+
 ### scan 命令 - 扫描目录
 
 ```powershell
@@ -1941,25 +1968,47 @@ uv run title-classifier vision --all -p gcli
 
 ### v8.2.0 (最新)
 
-**重大更新：YOLO11m-pose 升级**
-- 默认模型从 yolov8s-pose 升级到 yolo11m-pose，精度提升 5-8%
-- 默认后端从 auto 改为 openvino，更稳定
-- 默认置信度从 0.4 提高到 0.5
+**新增：日志系统和耗时追踪**
+- 日志默认输出到 `logs/<日期>/` 目录，按天分目录，文件始终记录 DEBUG 级别
+- 视觉处理分步耗时追踪：YOLO 推理、CLIP 差异度、帧选择、VLM API
+- YOLO 详情日志：每帧 detect/pose/segment 推理耗时、置信度、关键点数
+- CLIP 详情日志：分类耗时、穿着/动作/发型标签和置信度、差异度分数统计
+- VLM API 日志：请求耗时、token 用量（prompt+completion+total）
+- Debug 模式保存 `timing.json` 到调试目录
 
-**重大更新：标题优化批量配置**
-- 新增 `[refiner]` 配置节，支持配置批量大小和并发数
-- 默认 batch_size=10，减少 AI 标题丢失
-- 优化提示词，强调保留重要信息和博主名
+**新增：CLIP 帧差异度排序**
+- CLIP 编码每帧计算语义差异度，差异最大的帧优先发给 VLM
+- 帧选择权重调整：confidence 30% + keypoints 20% + pose 20% + 差异度 30%
+- VLM Prompt 新增【帧差异度提示】，引导重点分析场景变化最大的帧
+- 不使用 CLIP 时自动降级到原有逻辑，零影响
 
-**重大更新：GUI 设置页面增强**
-- 新增标题优化配置区块
-- 可配置批量大小和并发批次数
-- 修复鼠标滚动失效问题
+**新增：硅基流动 API 支持**
+- 新增 siliconflow provider，使用 Qwen/Qwen3.6-35B-A3B 模型
+- 使用 http.client 替代 urllib 解决 SSL 连接问题
 
-**重大更新：代码清理**
-- 移除 ONNX Runtime 相关代码，简化后端选择
-- 修复设置页面关闭时报错问题
-- 更新文档，反映最新配置
+**新增：扫描入库增强**
+- 新增 `--sync-db` 参数：仅同步数据库，不生成 CSV
+- `--sync-db` 同步完成后自动检查缺少视觉描述的记录，生成待处理 CSV
+- `--force` 模式自动更新数据库
+- GUI 扫描页面新增"同步数据库"选项
+
+**新增：标题优化页面重构**
+- 按钮分组（AI操作/编辑/过滤），布局更清晰
+- 新增"最终文件名预览"列
+- 多条件过滤下拉，撤销功能（10步）
+- 修改行高亮加深
+
+**新增：模型管理系统重构**
+- 模型管理页面重写：卡片式布局，显示流水线角色和下载状态
+- 模型配置统一到 default.toml + user.toml
+- 新增 model_registry.py 和 model_downloader.py
+
+**修复**
+- 修复 stats_label AttributeError（模型管理页面初始化顺序）
+- 修复主题切换不持久化（启动时从 config 读取主题）
+- 修复视觉描述/关键词不写入数据库（CLI + GUI 两条路径）
+- 修复 CLIP 模型状态检测（HF 目录名映射）
+- 依赖包清理：移除 onnxruntime-gpu，新增 tomli 和 huggingface_hub
 
 ### v6.0.0
 
