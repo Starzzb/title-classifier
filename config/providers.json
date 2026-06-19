@@ -1,17 +1,17 @@
 {
+  "ollama": {
+    "default_model": "qwen2.5:7b-instruct-q4_K_M"
+  },
+  "zhipu": {
+    "default_model": "GLM-4.7-Flash"
+  },
   "gcli": {
     "default_model": "gemini-3-flash-preview"
   },
   "mimo": {
-    "default_model": "mimo-v2-omni",
-    "note": "token上限较高，10帧可正常工作，支持音频转录"
+    "default_model": "mimo-v2.5"
   },
-  "zhipu": {
-    "default_model": "GLM-4.7-Flash",
-    "note": "有频率限制(429)，适合文本优化，视觉能力可用但有限"
-  },
-  "ollama": {
-    "default_model": "qwen2.5:7b-instruct-q4_K_M",
-    "note": "本地运行，仅支持文本(stage1b)，不支持视觉和音频"
+  "siliconflow": {
+    "default_model": "Qwen/Qwen3.6-35B-A3B"
   }
 }

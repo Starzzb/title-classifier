@@ -6,12 +6,40 @@
 import os
 import json
 import time
+import ssl
 import logging
+import http.client
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlparse
 from typing import Optional, Dict, List, Any, Union
 
 logger = logging.getLogger(__name__)
+
+
+def _http_request(url: str, payload: dict, api_key: str = "", timeout: int = 60) -> dict:
+    """统一的 HTTP 请求函数，使用 http.client 绕过 SSL 问题"""
+    parsed = urlparse(url)
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+
+    conn = http.client.HTTPSConnection(parsed.hostname, context=ctx, timeout=timeout)
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = "Bearer " + api_key
+
+    try:
+        conn.request("POST", parsed.path, json.dumps(payload).encode(), headers)
+        resp = conn.getresponse()
+        data = resp.read().decode()
+        result = json.loads(data)
+        if resp.status != 200:
+            error_msg = result.get("error", {}).get("message", data[:200])
+            raise Exception(f"HTTP {resp.status}: {error_msg}")
+        return result
+    finally:
+        conn.close()
 
 # 默认 Provider 注册表
 DEFAULT_PROVIDERS: Dict[str, Dict[str, Any]] = {
@@ -62,6 +90,18 @@ DEFAULT_PROVIDERS: Dict[str, Dict[str, Any]] = {
         "supports_1c": True,
         "supports_audio": True,
         "description": "小米自研视觉+音频模型",
+    },
+    "siliconflow": {
+        "name": "硅基流动",
+        "type": "multi",
+        "url": "https://api.siliconflow.cn/v1/chat/completions",
+        "env_key": "SILICONFLOW_API_KEY",
+        "default_model": "Qwen/Qwen3.6-35B-A3B",
+        "requires_api_key": True,
+        "supports_1b": True,
+        "supports_1c": True,
+        "supports_audio": False,
+        "description": "硅基流动 API，支持多种开源模型",
     },
 }
 
@@ -359,18 +399,9 @@ def _call_openai_compatible_api(
         "temperature": temperature,
         "reasoning": {"enabled": False},
     }
-    req = urllib.request.Request(
-        api_url,
-        data=json.dumps(payload).encode(),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        },
-    )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            result = json.loads(resp.read())
-            return result.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+        result = _http_request(api_url, payload, api_key, timeout)
+        return result.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
     except Exception as e:
         return f"[API 错误] {e}"
 
@@ -455,25 +486,16 @@ def call_vision_api(
 
     last_error = None
     for attempt in range(retries):
-        req = urllib.request.Request(
-            api_url,
-            data=json.dumps(payload).encode(),
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key}",
-            },
-        )
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                result = json.loads(resp.read())
-                content = result.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-                
-                # 记录API响应（用于调试）
-                logger.debug(f"Vision API响应: provider={provider_name}, model={model}, 响应长度={len(content)}")
-                if not content:
-                    logger.warning(f"Vision API返回空响应: {result}")
-                
-                return content
+            result = _http_request(api_url, payload, api_key, timeout)
+            content = result.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+
+            # 记录API响应（用于调试）
+            logger.debug(f"Vision API响应: provider={provider_name}, model={model}, 响应长度={len(content)}")
+            if not content:
+                logger.warning(f"Vision API返回空响应: {result}")
+
+            return content
         except Exception as e:
             last_error = e
             logger.error(f"Vision API调用失败 (尝试 {attempt+1}/{retries}): {e}")
