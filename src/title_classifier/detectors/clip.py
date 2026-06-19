@@ -2,6 +2,7 @@
 
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
@@ -367,6 +368,8 @@ class CLIPClassifier:
 
     def classify(self, image_path: str, threshold: float = 0.15, multi_label: bool = True) -> Dict[str, Any]:
         """多维分类"""
+        t0 = time.perf_counter()
+
         result = {
             "clothing": {"label": "", "label_cn": "", "confidence": 0.0},
             "action": {"label": "", "label_cn": "", "confidence": 0.0},
@@ -416,6 +419,15 @@ class CLIPClassifier:
         result["tags"] = "_".join(unique_tags)
         result["avg_confidence"] = sum(confidences) / len(confidences) if confidences else 0.0
 
+        elapsed = time.perf_counter() - t0
+        logger.debug(
+            f"[CLIP] 分类完成: 耗时={elapsed:.3f}s | "
+            f"穿着={result['clothing']['label_cn']}({result['clothing']['confidence']:.3f}), "
+            f"动作={result['action']['label_cn']}({result['action']['confidence']:.3f}), "
+            f"发型={result['hairstyle']['label_cn']}({result['hairstyle']['confidence']:.3f}) | "
+            f"标签={result['tags']}"
+        )
+
         return result
 
     def compute_frame_diff_scores(self, frames: list) -> list:
@@ -435,14 +447,21 @@ class CLIPClassifier:
         if len(frames) == 1:
             return [0.0]
 
+        t0 = time.perf_counter()
+
+        # 编码所有帧
+        t_encode = time.perf_counter()
         embeddings = []
         for frame in frames:
             emb = self._encode_image_array(frame)
             embeddings.append(emb)
+        encode_time = time.perf_counter() - t_encode
 
         n = len(embeddings)
         scores = []
 
+        # 计算差异度
+        t_calc = time.perf_counter()
         for i in range(n):
             if embeddings[i] is None:
                 scores.append(0.0)
@@ -458,6 +477,14 @@ class CLIPClassifier:
             avg_sim = np.mean(similarities) if similarities else 1.0
             diff_score = 1.0 - avg_sim
             scores.append(max(0.0, diff_score))
+        calc_time = time.perf_counter() - t_calc
+
+        total_time = time.perf_counter() - t0
+        logger.debug(
+            f"[CLIP] 差异度计算: {n}帧, "
+            f"编码={encode_time:.2f}s, 计算={calc_time:.3f}s, 总计={total_time:.2f}s | "
+            f"分数: min={min(scores):.3f}, max={max(scores):.3f}, avg={np.mean(scores):.3f}"
+        )
 
         return scores
 

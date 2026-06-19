@@ -2,6 +2,7 @@
 
 import logging
 import shutil
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 
@@ -515,31 +516,48 @@ class YOLODetector(BaseDetector):
         }
 
         # 并行运行三个模型
+        model_timing = {}
+
         if "detect" in self._models:
             try:
-                logger.debug("[DEBUG] detect模型开始推理")
+                t0 = time.perf_counter()
                 results["detection"] = self.detect(frame)
-                logger.debug("[DEBUG] detect模型推理完成")
+                model_timing["detect"] = time.perf_counter() - t0
                 results["models_used"].append("detect")
+                det = results["detection"]
+                n_persons = len(det.get("persons", []))
+                max_conf = det.get("max_confidence", 0)
+                logger.debug(f"[YOLO] detect: {n_persons}人, 置信度={max_conf:.3f}, 耗时={model_timing['detect']:.3f}s")
             except Exception as e:
+                model_timing["detect"] = 0
                 logger.warning(f"detect模型推理失败: {e}")
 
         if "pose" in self._models:
             try:
-                logger.debug("[DEBUG] pose模型开始推理")
+                t0 = time.perf_counter()
                 results["pose"] = self.estimate_pose(frame)
-                logger.debug("[DEBUG] pose模型推理完成")
+                model_timing["pose"] = time.perf_counter() - t0
                 results["models_used"].append("pose")
+                pose = results["pose"]
+                kpts = pose.get("visible_keypoints", 0)
+                analysis = pose.get("pose_analysis", [])
+                logger.debug(f"[YOLO] pose: 关键点={kpts}/17, 姿态={analysis}, 耗时={model_timing['pose']:.3f}s")
             except Exception as e:
+                model_timing["pose"] = 0
                 logger.warning(f"pose模型推理失败: {e}")
 
         if "segment" in self._models:
             try:
-                logger.debug("[DEBUG] segment模型开始推理")
+                t0 = time.perf_counter()
                 results["segment"] = self.segment_instances(frame)
-                logger.debug("[DEBUG] segment模型推理完成")
+                model_timing["segment"] = time.perf_counter() - t0
                 results["models_used"].append("segment")
+                seg = results["segment"]
+                mask_ratio = seg.get("mask_ratio", 0)
+                color_var = seg.get("wearing_analysis", {}).get("color_variance", 0)
+                logger.debug(f"[YOLO] segment: mask={mask_ratio:.3f}, 色彩变化={color_var:.1f}, 耗时={model_timing['segment']:.3f}s")
             except Exception as e:
+                model_timing["segment"] = 0
                 logger.warning(f"segment模型推理失败: {e}")
 
         # CUDA显存清理
@@ -566,6 +584,9 @@ class YOLODetector(BaseDetector):
 
         # 判断是否有人体
         results["has_person"] = results["merged"].get("has_person", False)
+
+        # 记录各模型耗时
+        results["model_timing"] = model_timing
 
         return results
 

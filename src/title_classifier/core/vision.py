@@ -4,6 +4,7 @@ import csv
 import json
 import os
 import re
+import time
 import logging
 import tempfile
 import threading
@@ -199,6 +200,9 @@ class VisionProcessor:
 
     def _process_video_comprehensive(self, video_path: str, title: str, duration: float, audio_context: str = "", subtitle_segments: List[Dict] = None) -> Dict:
         """视频全面分析"""
+        timing = {}  # 分步耗时追踪
+        t_total_start = time.perf_counter()
+
         mode_name = "全面分析" if len(self.yolo_models) > 1 else "基础"
         logger.info(f"启动YOLO{mode_name}模式，采样间隔: {self.analysis_step}秒，模型: {self.yolo_models}")
 
@@ -214,30 +218,37 @@ class VisionProcessor:
             (debug_subdir / "vlm_frames").mkdir(exist_ok=True)
             logger.info(f"调试目录: {debug_subdir}")
 
-        # 1. 全面扫描视频
+        # 1. 全面扫描视频（YOLO 推理）
+        t1 = time.perf_counter()
         video_analysis = self._analyze_video_comprehensive(video_path, duration)
+        timing["yolo_total"] = time.perf_counter() - t1
 
-        # 2. 智能选择代表性帧
-        # 2.5 CLIP 差异度评分（如果 CLIP 可用，对所有采样帧计算）
+        # 2. CLIP 差异度评分
         clip_diff_scores = None
         if self.use_clip and self.clip_classifier and self.clip_classifier._loaded:
+            t_clip = time.perf_counter()
             try:
                 all_frames = video_analysis["frames"]
                 frames_for_diff = [cv2.imread(f) for f in all_frames]
                 frames_for_diff = [f for f in frames_for_diff if f is not None]
                 if frames_for_diff:
                     clip_diff_scores = self.clip_classifier.compute_frame_diff_scores(frames_for_diff)
-                    logger.info(f"CLIP 差异度评分完成: min={min(clip_diff_scores):.3f}, max={max(clip_diff_scores):.3f}")
+                    timing["clip_diff"] = time.perf_counter() - t_clip
+                    logger.info(f"CLIP 差异度评分完成: min={min(clip_diff_scores):.3f}, max={max(clip_diff_scores):.3f}, 耗时={timing['clip_diff']:.2f}s")
             except Exception as e:
-                logger.warning(f"CLIP 差异度评分失败: {e}")
+                timing["clip_diff"] = time.perf_counter() - t_clip
+                logger.warning(f"CLIP 差异度评分失败: {e}, 耗时={timing['clip_diff']:.2f}s")
                 clip_diff_scores = None
 
+        # 3. 帧选择
+        t2 = time.perf_counter()
         selected_indices = self._select_representative_frames(
             video_analysis["timeline"], clip_diff_scores=clip_diff_scores
         )
         selected_frames = video_analysis["frames"]
+        timing["frame_selection"] = time.perf_counter() - t2
 
-        logger.info(f"帧选择完成: 总帧数={len(selected_frames)}, 选中帧数={len(selected_indices)}")
+        logger.info(f"帧选择完成: 总帧数={len(selected_frames)}, 选中帧数={len(selected_indices)}, 耗时={timing['frame_selection']:.3f}s")
 
         # 3. 生成视频摘要
         video_summary = self._generate_video_summary(video_analysis["timeline"], duration)
@@ -288,6 +299,7 @@ class VisionProcessor:
         if debug_subdir:
             self._save_vlm_debug(frames_for_vlm, prompt, debug_subdir)
 
+        t_vlm = time.perf_counter()
         result = self._call_vlm_comprehensive(
             frames_for_vlm,
             title,
@@ -296,8 +308,9 @@ class VisionProcessor:
             per_frame_subtitle,
             diff_hint=diff_hint,
         )
+        timing["vlm_api"] = time.perf_counter() - t_vlm
 
-        logger.info(f"VLM结果: 描述='{result.get('description', '')[:50]}...', 关键词='{result.get('keywords', '')[:50]}...'")
+        logger.info(f"VLM结果: 描述='{result.get('description', '')[:50]}...', 关键词='{result.get('keywords', '')[:50]}...', 耗时={timing['vlm_api']:.2f}s")
 
         # 7. 保存分析结果
         # 计算选中帧的时间戳
@@ -327,6 +340,27 @@ class VisionProcessor:
         # 记录调试目录路径
         if debug_subdir:
             analysis_result["debug_dir"] = str(debug_subdir)
+
+        # 耗时汇总
+        timing["total"] = time.perf_counter() - t_total_start
+        analysis_result["timing"] = timing
+
+        # 日志输出耗时汇总
+        motion_skipped = video_analysis.get("motion_skipped_count", 0)
+        yolo_inference = video_analysis.get("yolo_inference_count", len(video_analysis.get("timeline", [])))
+        logger.info(
+            f"处理完成: 总耗时={timing['total']:.2f}s | "
+            f"YOLO={timing.get('yolo_total', 0):.2f}s({yolo_inference}帧推理,{motion_skipped}帧跳过) | "
+            f"CLIP={timing.get('clip_diff', 0):.2f}s | "
+            f"帧选择={timing.get('frame_selection', 0):.3f}s | "
+            f"VLM={timing.get('vlm_api', 0):.2f}s"
+        )
+
+        # Debug 模式保存耗时数据
+        if debug_subdir:
+            timing_path = debug_subdir / "timing.json"
+            with open(timing_path, "w", encoding="utf-8") as f:
+                json.dump(timing, f, indent=2, ensure_ascii=False)
 
         return analysis_result
 

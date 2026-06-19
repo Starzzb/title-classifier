@@ -38,14 +38,39 @@ def _import_atomic_csv():
 
 
 def setup_logging(verbose: bool = False, log_file: str = None):
-    """设置日志"""
+    """设置日志
+
+    日志默认输出到 logs/<日期>/ 目录，按天分目录。
+    控制台输出 INFO 级别，文件输出 DEBUG 级别。
+    """
+    from datetime import datetime as dt
+
     level = logging.DEBUG if verbose else logging.INFO
-    handlers = [logging.StreamHandler()]
+
+    # 控制台 handler
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(level)
+
+    # 文件 handler（默认输出到 logs/<日期>/ 目录）
+    handlers = [console_handler]
     if log_file:
         Path(log_file).parent.mkdir(parents=True, exist_ok=True)
-        handlers.append(logging.FileHandler(log_file, encoding="utf-8"))
+        file_handler = logging.FileHandler(log_file, encoding="utf-8")
+        file_handler.setLevel(logging.DEBUG)
+        handlers.append(file_handler)
+    else:
+        # 默认按天分目录
+        today = dt.now().strftime("%Y-%m-%d")
+        log_dir = Path("logs") / today
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_filename = dt.now().strftime("%H%M%S") + ".log"
+        log_path = log_dir / log_filename
+        file_handler = logging.FileHandler(str(log_path), encoding="utf-8")
+        file_handler.setLevel(logging.DEBUG)
+        handlers.append(file_handler)
+
     logging.basicConfig(
-        level=level,
+        level=logging.DEBUG,
         format="%(asctime)s [%(levelname)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
         handlers=handlers,

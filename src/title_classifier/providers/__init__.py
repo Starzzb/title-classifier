@@ -486,19 +486,31 @@ def call_vision_api(
 
     last_error = None
     for attempt in range(retries):
+        t_start = time.perf_counter()
         try:
             result = _http_request(api_url, payload, api_key, timeout)
+            elapsed = time.perf_counter() - t_start
             content = result.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
 
-            # 记录API响应（用于调试）
-            logger.debug(f"Vision API响应: provider={provider_name}, model={model}, 响应长度={len(content)}")
+            # 提取 token 用量信息
+            usage = result.get("usage", {})
+            prompt_tokens = usage.get("prompt_tokens", 0)
+            completion_tokens = usage.get("completion_tokens", 0)
+            total_tokens = usage.get("total_tokens", 0)
+
+            logger.info(
+                f"Vision API调用成功: provider={provider_name}, model={model}, "
+                f"耗时={elapsed:.2f}s, tokens={prompt_tokens}+{completion_tokens}={total_tokens}, "
+                f"响应长度={len(content)}"
+            )
             if not content:
                 logger.warning(f"Vision API返回空响应: {result}")
 
             return content
         except Exception as e:
+            elapsed = time.perf_counter() - t_start
             last_error = e
-            logger.error(f"Vision API调用失败 (尝试 {attempt+1}/{retries}): {e}")
+            logger.error(f"Vision API调用失败 (尝试 {attempt+1}/{retries}, 耗时={elapsed:.2f}s): {e}")
             if attempt < retries - 1:
                 # SSL/网络错误增加额外等待
                 if "SSL" in str(e) or "EOF" in str(e) or "UNEXPECTED_EOF" in str(e):
