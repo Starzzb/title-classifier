@@ -16,8 +16,25 @@ CLIP_CACHE_DIR = Path(__file__).parent.parent.parent.parent / "models" / "clip"
 CLIP_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 # CLIP 模型配置
-CLIP_MODEL_NAME = "ViT-B-16"
-CLIP_PRETRAINED = "laion2b_s34b_b88k"
+def _load_clip_config() -> tuple:
+    """从 config 读取用户选择的 CLIP 模型，fallback 到默认值"""
+    from ..core.model_registry import MODEL_REGISTRY, get_clip_pretrained, get_clip_open_clip_name
+
+    default_name = MODEL_REGISTRY["clip"]["default"]
+    default_pretrained = get_clip_pretrained(default_name)
+    default_open_clip = get_clip_open_clip_name(default_name)
+    try:
+        from ..utils.config import load_merged_config
+        config = load_merged_config()
+        model_name = config.get("models", {}).get("clip", default_name)
+        pretrained = get_clip_pretrained(model_name)
+        open_clip_name = get_clip_open_clip_name(model_name)
+        return open_clip_name, pretrained
+    except Exception:
+        return default_open_clip, default_pretrained
+
+
+CLIP_MODEL_NAME, CLIP_PRETRAINED = _load_clip_config()
 
 # 基础分类维度
 CLOTHING_BASE = {

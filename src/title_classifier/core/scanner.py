@@ -228,6 +228,95 @@ class Scanner:
         if keywords and media_id:
             db.add_tags_from_keywords(media_id, keywords, "scanner")
 
+    def sync_db(self, target_dir: str, exclude_dirs: list = None):
+        """扫描目录，将所有文件信息同步到数据库（不生成 CSV）
+
+        Args:
+            target_dir: 目标目录
+            exclude_dirs: 排除的目录列表
+        """
+        if not self.db_store:
+            logger.error("未配置数据库连接，无法同步")
+            return
+
+        target_path = Path(target_dir).resolve()
+        if not target_path.exists():
+            logger.error(f"路径不存在: {target_path}")
+            return
+
+        if target_path.is_file():
+            logger.error("sync_db 模式仅支持目录扫描")
+            return
+
+        logger.info(f"开始同步数据库: {target_path}")
+        files = self._scan_directory(target_path, exclude_dirs or [])
+        logger.info(f"找到 {len(files)} 个媒体文件，开始同步...")
+
+        updated = 0
+        inserted = 0
+        skipped = 0
+
+        for file_path in files:
+            name = file_path.stem
+            classified = is_already_classified(name)
+            clean_title = strip_bracket_prefix(file_path.name)
+            clean_name = strip_bracket_prefix(name)
+
+            # 收集元数据
+            file_size = None
+            try:
+                file_size = file_path.stat().st_size
+            except OSError:
+                pass
+
+            duration = None
+            resolution = ""
+            if file_path.suffix.lower() in VIDEO_EXTENSIONS:
+                try:
+                    from ..utils.video import get_video_info
+                    vinfo = get_video_info(str(file_path))
+                    duration = vinfo.get("duration") or None
+                    resolution = vinfo.get("resolution", "")
+                except Exception:
+                    pass
+
+            data = {
+                "original_title": clean_title,
+                "original_path": str(file_path),
+                "current_path": str(file_path),
+                "file_size": file_size,
+                "duration": duration,
+                "resolution": resolution,
+                "needs_vision": not classified,
+                "final_name": clean_name,
+                "review_status": "已规范化" if classified else "待确认",
+            }
+
+            existing = self.db_store.find_match(
+                original_title=clean_title,
+                file_size=file_size,
+                duration=duration,
+            )
+
+            if existing:
+                # 匹配到旧记录：更新路径和元数据
+                changed = False
+                for field in ["original_path", "current_path", "file_size", "duration", "resolution"]:
+                    new_val = data.get(field)
+                    old_val = existing.get(field)
+                    if new_val and new_val != old_val:
+                        self.db_store.update_media(existing["id"], field, new_val, "sync_db")
+                        changed = True
+                if changed:
+                    updated += 1
+                else:
+                    skipped += 1
+            else:
+                self.db_store.insert_media(data)
+                inserted += 1
+
+        logger.info(f"[完成] 数据库同步: 新增 {inserted}, 更新 {updated}, 无变化 {skipped}")
+
     def _scan_directory(self, directory: Path, exclude_dirs: List[str]) -> List[Path]:
         """递归扫描目录"""
         files = []

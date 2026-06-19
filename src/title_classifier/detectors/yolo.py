@@ -14,11 +14,30 @@ logger = logging.getLogger(__name__)
 
 # YOLO 模型配置
 YOLO_MODEL_DIR = Path(__file__).parent.parent.parent.parent / "models" / "yolo"
-YOLO_MODELS = {
-    "detect": YOLO_MODEL_DIR / "yolov8n.pt",
-    "pose": YOLO_MODEL_DIR / "yolo11m-pose.pt",
-    "segment": YOLO_MODEL_DIR / "yolov8n-seg.pt",
-}
+
+
+def _load_yolo_models_from_config() -> Dict[str, Path]:
+    """从 config 读取用户选择的 YOLO 模型文件名，fallback 到默认值"""
+    from ..core.model_registry import MODEL_REGISTRY
+
+    defaults = {
+        "detect": MODEL_REGISTRY["yolo_detect"]["default"],
+        "pose": MODEL_REGISTRY["yolo_pose"]["default"],
+        "segment": MODEL_REGISTRY["yolo_segment"]["default"],
+    }
+    try:
+        from ..utils.config import load_merged_config
+        config = load_merged_config()
+        models_cfg = config.get("models", {})
+        return {
+            task: YOLO_MODEL_DIR / models_cfg.get(f"yolo_{task}", default)
+            for task, default in defaults.items()
+        }
+    except Exception:
+        return {task: YOLO_MODEL_DIR / default for task, default in defaults.items()}
+
+
+YOLO_MODELS = _load_yolo_models_from_config()
 
 # OpenVINO 模型缓存目录
 OPENVINO_MODEL_DIR = YOLO_MODEL_DIR / "openvino"

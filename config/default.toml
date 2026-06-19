@@ -43,6 +43,12 @@ motion_min_interval = 5.0
 hw_accel = "auto"
 batch_extract = true
 
+[models]
+yolo_detect = "yolov8n.pt"
+yolo_pose = "yolo11m-pose.pt"
+yolo_segment = "yolov8n-seg.pt"
+clip = "CLIP-ViT-B-16-laion2B-s34B-b88K"
+
 [yolo]
 model_type = "pose"
 confidence = 0.5

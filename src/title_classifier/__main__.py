@@ -69,16 +69,30 @@ def load_env(env_path: Path):
 def cmd_scan(args):
     """扫描命令"""
     Scanner, _, _, _, _ = _import_core()
-    scanner = Scanner(output_dir=args.output_dir)
-    output = scanner.scan(
-        target_dir=args.dir,
-        output_file=args.output,
-        append=args.append,
-        exclude_dirs=args.exclude_dir,
-        force_reclassify=args.force,
-    )
-    if output:
-        print(f"[完成] 结果已保存至: {output}")
+
+    # 需要写 DB 时创建连接
+    db = None
+    if args.sync_db or args.force:
+        from .core.db_store import MediaDB
+        db = MediaDB()
+        db.init_schema()
+
+    scanner = Scanner(output_dir=args.output_dir, db_store=db)
+
+    if args.sync_db:
+        # DB 同步模式：扫描全部文件，只写 DB，不生成 CSV
+        scanner.sync_db(target_dir=args.dir, exclude_dirs=args.exclude_dir)
+    else:
+        # 普通扫描 / 强制重分类：生成 CSV
+        output = scanner.scan(
+            target_dir=args.dir,
+            output_file=args.output,
+            append=args.append,
+            exclude_dirs=args.exclude_dir,
+            force_reclassify=args.force,
+        )
+        if output:
+            print(f"[完成] 结果已保存至: {output}")
 
 
 def cmd_refine(args):
@@ -121,6 +135,11 @@ def cmd_vision(args):
     else:
         yolo_models = ["pose"]
 
+    # 初始化数据库
+    from .core.db_store import MediaDB
+    db = MediaDB()
+    db.init_schema()
+
     # 初始化处理器
     processor = VisionProcessor(
         provider=args.provider,
@@ -139,6 +158,7 @@ def cmd_vision(args):
         motion_detection=not args.no_motion_detection,
         motion_threshold=args.motion_threshold,
         backend=args.backend,
+        db_store=db,
     )
 
     if not processor.initialize():
@@ -642,6 +662,7 @@ def main():
     scan_cmd.add_argument("-a", "--append", action="store_true", help="追加模式")
     scan_cmd.add_argument("--exclude-dir", nargs="*", default=[], help="排除的目录")
     scan_cmd.add_argument("--force", action="store_true", help="强制重新分类")
+    scan_cmd.add_argument("--sync-db", action="store_true", help="仅同步数据库（不生成CSV）")
     scan_cmd.set_defaults(func=cmd_scan)
 
     # refine 命令

@@ -60,17 +60,22 @@ class StageScanTab(ttk.Frame):
         ToolTip(append_cb, "勾选后新扫描结果追加到现有CSV文件，否则覆盖")
 
         self.s1_force_var = tk.BooleanVar()
-        force_cb = ttk.Checkbutton(opt_frame, text="强制重新分类", variable=self.s1_force_var)
+        force_cb = ttk.Checkbutton(opt_frame, text="强制重新分类", variable=self.s1_force_var, command=self._on_option_changed)
         force_cb.pack(side=tk.LEFT, padx=4)
-        ToolTip(force_cb, "勾选后即使文件已有分类标签也会重新处理")
+        ToolTip(force_cb, "勾选后即使文件已有分类标签也会重新处理（生成全量CSV + 更新数据库）")
+
+        self.s1_sync_db_var = tk.BooleanVar()
+        sync_db_cb = ttk.Checkbutton(opt_frame, text="同步数据库", variable=self.s1_sync_db_var, command=self._on_option_changed)
+        sync_db_cb.pack(side=tk.LEFT, padx=4)
+        ToolTip(sync_db_cb, "仅将文件信息同步到数据库（不生成CSV）")
 
         # 执行按钮
         btn_frame = ttk.Frame(tab)
         btn_frame.pack(fill=tk.X, padx=4, pady=8)
 
-        scan_btn = ttk.Button(btn_frame, text="开始扫描", command=self._run_scan)
-        scan_btn.pack(side=tk.LEFT, padx=4)
-        ToolTip(scan_btn, "扫描目录中的媒体文件，提取关键词，生成待审CSV表")
+        self.scan_btn = ttk.Button(btn_frame, text="开始扫描", command=self._run_scan)
+        self.scan_btn.pack(side=tk.LEFT, padx=4)
+        ToolTip(self.scan_btn, "扫描目录中的媒体文件，根据选项生成CSV和/或更新数据库")
 
     def _browse_dir(self):
         """浏览目录"""
@@ -81,6 +86,17 @@ class StageScanTab(ttk.Frame):
             dir_name = Path(dir_path).resolve().name
             suggested = Path(PROJECT_DIR) / "data" / "output" / dir_name / "title_review.csv"
             self.s1_output_var.set(str(suggested))
+
+    def _on_option_changed(self):
+        """强制重分类和同步数据库互斥"""
+        if self.s1_force_var.get() and self.s1_sync_db_var.get():
+            # 谁后勾选谁生效，取消另一个
+            # 通过 widget 的 invoke 顺序判断：sync_db_cb 在 force_cb 后面
+            # 简单处理：根据当前状态取消冲突项
+            if self.s1_sync_db_var.get():
+                self.s1_force_var.set(False)
+            else:
+                self.s1_sync_db_var.set(False)
 
     def _browse_file(self):
         """浏览文件"""
@@ -101,7 +117,20 @@ class StageScanTab(ttk.Frame):
             messagebox.showwarning("警告", "请选择扫描目录")
             return
 
-        # 自动计算 per-directory 的输出路径
+        sync_db = self.s1_sync_db_var.get()
+
+        # 同步数据库模式：不需要输出路径
+        if sync_db:
+            cmd = [PYTHON, "-m", "title_classifier", "scan", "-d", dir_path, "--sync-db"]
+
+            def on_complete(returncode=None):
+                if returncode == 0:
+                    print("[完成] 数据库同步完成")
+
+            self._run_command(cmd, callback=on_complete)
+            return
+
+        # 普通扫描 / 强制重分类：需要输出路径
         target = Path(dir_path).resolve()
         if target.is_dir():
             dir_name = target.name

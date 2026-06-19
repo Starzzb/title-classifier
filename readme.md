@@ -245,7 +245,30 @@ uv run title-classifier scan -d "F:\Videos" [选项]
 | `--output-dir` | 输出目录（默认 data/output） |
 | `-a, --append` | 追加模式 |
 | `--exclude-dir` | 排除的目录 |
-| `--force` | 强制重新分类 |
+| `--force` | 强制重新分类（全量CSV + 更新数据库） |
+| `--sync-db` | 仅同步数据库（不生成CSV） |
+
+**扫描模式说明：**
+
+| 模式 | CSV | 数据库 |
+|------|-----|--------|
+| 普通扫描 | 生成（仅未分类文件） | 不动 |
+| `--force` | 生成（全量，重新判断 needs_vision） | 全量更新 |
+| `--sync-db` | 不生成 | 全量更新（含已分类文件的路径和元数据） |
+
+```powershell
+# 普通扫描：只处理未分类文件
+uv run title-classifier scan -d "F:\Videos"
+
+# 强制重分类：全量CSV + 更新数据库
+uv run title-classifier scan -d "F:\Videos" --force
+
+# 同步数据库：将所有文件信息写入数据库（不生成CSV）
+uv run title-classifier scan -d "F:\Videos" --sync-db
+
+# 同步整个磁盘（排除系统目录）
+uv run title-classifier scan -d "E:\" --sync-db --exclude-dir "$RECYCLE.BIN" "System Volume Information"
+```
 
 ### refine 命令 - AI优化标题
 
@@ -336,17 +359,26 @@ uv run title-classifier gui
 - 选择目录：递归扫描所有子目录中的媒体文件
 - 选择文件：只处理选中的单个媒体文件
 
+**选项：**
+- **追加模式**：新扫描结果追加到现有CSV文件
+- **强制重新分类**：即使文件已有分类标签也重新处理（全量CSV + 更新数据库）
+- **同步数据库**：仅将文件信息同步到数据库（不生成CSV）
+
+"开始扫描"按钮根据勾选的选项执行对应模式。
+
 ### Stage1b 预览编辑功能
 
-- **加载CSV**：加载CSV到预览表格
-- **AI优化**：调用AI优化标题，自动加载结果
-- **右键菜单**（按功能分组）：
-  - **标题操作**：
-    - 编辑标题：双击或右键编辑优化结果
-    - 采用原标题：使用原始文件名（标记为已修改）
-    - 重置为原标题：取消优化（不标记为修改）
-  - **状态切换（即时生效）**：
-    - 需要视觉识别：切换 TRUE/FALSE（即时写入CSV）
+**布局：** 顶部操作栏按功能分组（AI操作 / 编辑 / 过滤），底部状态栏包含确认写入和撤销按钮。
+
+**表格列：** 原始标题 / 视觉 / 音频 / AI优化结果 / 最终文件名预览
+
+**操作：**
+- **AI操作组**：优化选中、优化全部、填入原标题
+- **编辑组**：编辑、删除
+- **过滤组**：多条件下拉过滤（needs_vision / audio_recognized / 已修改）
+- **右键菜单**：编辑标题、采用原标题、重置、状态切换、批量操作
+- **撤销**：支持撤销最近 10 步操作
+- **最终文件名预览**：实时显示 `[关键词]_原标题` 的实际效果
     - 音频已识别：切换 TRUE/FALSE（即时写入CSV）
   - **其他**：
     - 删除：从预览中移除
@@ -1974,6 +2006,33 @@ uv run title-classifier vision --all -p gcli
 - 支持图片文件（.jpg, .jpeg, .png, .bmp, .webp, .gif, .tiff）
 - 人体检测预处理默认启用（YOLO 模型）
 - 新增智能压缩、水印优先功能
+
+**v8.2.0 更新：**
+
+**模型管理系统重构：**
+- 模型管理页面重写：卡片式布局，显示模型描述、流水线角色、下载状态
+- 模型配置统一到 `config/default.toml` + `config/user.toml`，废弃 `config/models.json`
+- 模型切换真正生效：detectors 从 config 读取用户选择的模型
+- 新增 `core/model_registry.py`（声明式模型注册表）和 `core/model_downloader.py`（下载逻辑解耦）
+- 依赖包清理：移除 `onnxruntime-gpu`，新增 `tomli`（Python 3.10 兼容）和 `huggingface_hub`（可选）
+
+**扫描入库增强：**
+- 新增 `--sync-db` 参数：仅同步数据库，不生成 CSV（适合全盘索引）
+- `--force` 模式自动更新数据库
+- GUI 扫描页面新增"同步数据库"选项（与"强制重新分类"互斥）
+
+**标题优化页面重构：**
+- 按钮分组：AI操作 / 编辑 / 过滤，布局更清晰
+- 新增"最终文件名预览"列，实时显示 `[关键词]_原标题` 效果
+- 多条件过滤下拉（needs_vision / audio_recognized / 已修改）
+- 新增撤销功能（最近 10 步）
+- 修改行高亮加深（`#c8e0ff`）
+
+**其他修复：**
+- 修复 `stats_label` AttributeError（模型管理页面初始化顺序）
+- 修复主题切换不持久化（启动时从 config 读取主题）
+- 修复视觉描述/关键词不写入数据库（CLI 和 GUI 两条路径）
+- 修复 CLIP 模型状态检测（目录名映射修正）
 
 ### v3.0.0
 - 新增阶段 1c：视觉理解提取关键词

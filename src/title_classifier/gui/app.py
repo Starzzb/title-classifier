@@ -25,7 +25,7 @@ from .context import AppContext
 PROJECT_DIR = Path(__file__).parent.parent.parent.parent.resolve()
 PYTHON = sys.executable
 DEFAULT_CSV = "data/output/title_review.csv"
-THEME_NAME = "solar"
+DEFAULT_THEME = "solar"
 
 
 class ToolTip:
@@ -98,7 +98,11 @@ class TitleClassifierApp(ttk.Window):
     """视频标题分类工具主窗口"""
 
     def __init__(self):
-        super().__init__(title="视频标题分类工具 v8.1", themename=THEME_NAME)
+        from ..utils.config import load_merged_config, get_config_value
+        config = load_merged_config()
+        self.current_theme = get_config_value(config, "theme.name", DEFAULT_THEME)
+
+        super().__init__(title="视频标题分类工具 v8.1", themename=self.current_theme)
         self.geometry("900x850")
         self.minsize(800, 700)
 
@@ -267,7 +271,7 @@ class TitleClassifierApp(ttk.Window):
         view_menu.add_cascade(label="主题", menu=theme_menu)
         for theme_name in ["solar", "cosmo", "darkly", "flatly", "superhero", "cyborg"]:
             theme_menu.add_command(
-                label=f"{'[当前] ' if theme_name == THEME_NAME else ''}{theme_name}",
+                label=f"{'[当前] ' if theme_name == self.current_theme else ''}{theme_name}",
                 command=lambda t=theme_name: self._switch_theme(t),
             )
 
@@ -289,6 +293,7 @@ class TitleClassifierApp(ttk.Window):
         """切换主题"""
         try:
             self.style.theme_use(theme_name)
+            self.current_theme = theme_name
             print(f"[信息] 主题已切换: {theme_name}")
         except Exception as e:
             print(f"[错误] 主题切换失败: {e}")
@@ -316,7 +321,7 @@ class TitleClassifierApp(ttk.Window):
         """打开模型管理对话框"""
         try:
             from .model_manager import ModelManagerDialog
-            ModelManagerDialog(self)
+            ModelManagerDialog(self, self.ctx)
         except ImportError as e:
             print(f"[错误] 模型管理对话框加载失败: {e}")
 
@@ -376,7 +381,7 @@ class TitleClassifierApp(ttk.Window):
         self.log_text.delete("1.0", tk.END)
 
     def _sync_csv_to_db(self, csv_path: str):
-        """同步CSV记录到数据库"""
+        """同步CSV记录到数据库（插入新记录 + 更新已有记录的视觉/音频字段）"""
         if not self.ctx.db:
             return
         try:
@@ -394,7 +399,22 @@ class TitleClassifierApp(ttk.Window):
                         "final_name": row.get("final_name", ""),
                         "needs_vision": 1 if row.get("needs_vision", "").lower() == "true" else 0,
                     }
+                    # 包含视觉/音频字段
+                    for field in ["vision_description", "vision_keywords", "srt_path",
+                                  "human_detected", "detection_method",
+                                  "audio_transcript", "audio_segments"]:
+                        val = row.get(field, "").strip()
+                        if val:
+                            data[field] = val
                     self.ctx.db.insert_media(data)
+                else:
+                    # 更新已有记录的视觉/音频字段
+                    for field in ["vision_description", "vision_keywords", "final_name",
+                                  "srt_path", "human_detected", "detection_method",
+                                  "audio_transcript", "audio_segments"]:
+                        val = row.get(field, "").strip()
+                        if val:
+                            self.ctx.db.update_media(media["id"], field, val, "csv_sync")
         except Exception as e:
             print(f"[警告] CSV同步到数据库失败: {e}")
 
