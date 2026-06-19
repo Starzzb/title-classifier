@@ -218,7 +218,23 @@ class VisionProcessor:
         video_analysis = self._analyze_video_comprehensive(video_path, duration)
 
         # 2. 智能选择代表性帧
-        selected_indices = self._select_representative_frames(video_analysis["timeline"])
+        # 2.5 CLIP 差异度评分（如果 CLIP 可用，对所有采样帧计算）
+        clip_diff_scores = None
+        if self.use_clip and self.clip_classifier and self.clip_classifier._loaded:
+            try:
+                all_frames = video_analysis["frames"]
+                frames_for_diff = [cv2.imread(f) for f in all_frames]
+                frames_for_diff = [f for f in frames_for_diff if f is not None]
+                if frames_for_diff:
+                    clip_diff_scores = self.clip_classifier.compute_frame_diff_scores(frames_for_diff)
+                    logger.info(f"CLIP 差异度评分完成: min={min(clip_diff_scores):.3f}, max={max(clip_diff_scores):.3f}")
+            except Exception as e:
+                logger.warning(f"CLIP 差异度评分失败: {e}")
+                clip_diff_scores = None
+
+        selected_indices = self._select_representative_frames(
+            video_analysis["timeline"], clip_diff_scores=clip_diff_scores
+        )
         selected_frames = video_analysis["frames"]
 
         logger.info(f"帧选择完成: 总帧数={len(selected_frames)}, 选中帧数={len(selected_indices)}")
@@ -614,10 +630,11 @@ class VisionProcessor:
             "yolo_inference_count": yolo_inference_count,
         }
 
-    def _select_representative_frames(self, timeline: List[Dict], max_frames: int = 10) -> List[int]:
+    def _select_representative_frames(self, timeline: List[Dict], max_frames: int = 10, clip_diff_scores: list = None) -> List[int]:
         """
         分区段选择代表性帧：将采样帧等分为 max_frames 个区段，
         每个区段内独立选最优帧，保证全视频均匀覆盖。
+        clip_diff_scores: CLIP 差异度评分列表，用于优先选择差异大的帧。
         """
         n = len(timeline)
         if n == 0:
@@ -637,32 +654,44 @@ class VisionProcessor:
 
             segment = [(i, timeline[i]) for i in range(start, end)]
 
+            # 构建当前区段的差异度评分字典
+            diff_scores_for_segment = None
+            if clip_diff_scores:
+                diff_scores_for_segment = {
+                    i: clip_diff_scores[i] if i < len(clip_diff_scores) else 0.0
+                    for i in range(start, end)
+                }
+
             # 区段内按置信度+关键点加权选最优帧
-            best_i = self._pick_best_from_segment(segment)
+            best_i = self._pick_best_from_segment(segment, diff_scores_for_segment)
             selected.append(best_i)
 
         return selected
 
-    def _pick_best_from_segment(self, segment: List[tuple]) -> int:
+    def _pick_best_from_segment(self, segment: List[tuple], diff_scores: dict = None) -> int:
         """从区段内选出最优帧索引，无人体时取中间帧"""
         frames_with_person = [(i, t) for i, t in segment if t.get("has_person")]
 
         if not frames_with_person:
-            # 无人体帧，取区段中间帧保证覆盖
+            # 无人体帧，优先选择差异度高的帧，否则取中间帧
+            if diff_scores:
+                return max(segment, key=lambda x: diff_scores.get(x[0], 0.0))[0]
             return segment[len(segment) // 2][0]
 
-        # 加权评分：confidence 40% + visible_keypoints/17 30% + 姿态变化 30%
+        # 加权评分：confidence 30% + visible_keypoints/17 20% + 姿态变化 20% + diff_score 30%
         prev_pose = None
         best_score = -1
         best_idx = frames_with_person[0][0]
 
         for i, t in frames_with_person:
-            score = t.get("confidence", 0) * 40
-            score += (t.get("visible_keypoints", 0) / 17) * 30
+            score = t.get("confidence", 0) * 30
+            score += (t.get("visible_keypoints", 0) / 17) * 20
             current_pose = tuple(t.get("pose_analysis", []))
             if prev_pose and current_pose != prev_pose:
-                score += 30
+                score += 20
             prev_pose = current_pose
+            if diff_scores:
+                score += diff_scores.get(i, 0.0) * 30
 
             if score > best_score:
                 best_score = score
