@@ -418,6 +418,49 @@ class CLIPClassifier:
 
         return result
 
+    def compute_frame_diff_scores(self, frames: list) -> list:
+        """计算每帧与所有其他帧的差异度分数
+
+        差异度 = 1 - 该帧与所有其他帧的平均余弦相似度
+        分数越高 = 该帧越"独特"（与其他帧差异越大）
+
+        Args:
+            frames: numpy array 列表（BGR 格式）
+
+        Returns:
+            每帧的差异度分数列表，范围 [0, 1]
+        """
+        if not frames:
+            return []
+        if len(frames) == 1:
+            return [0.0]
+
+        embeddings = []
+        for frame in frames:
+            emb = self._encode_image_array(frame)
+            embeddings.append(emb)
+
+        n = len(embeddings)
+        scores = []
+
+        for i in range(n):
+            if embeddings[i] is None:
+                scores.append(0.0)
+                continue
+
+            similarities = []
+            for j in range(n):
+                if i == j or embeddings[j] is None:
+                    continue
+                sim = float(np.dot(embeddings[i].flatten(), embeddings[j].flatten()))
+                similarities.append(sim)
+
+            avg_sim = np.mean(similarities) if similarities else 1.0
+            diff_score = 1.0 - avg_sim
+            scores.append(max(0.0, diff_score))
+
+        return scores
+
     def detect_change_by_embedding(self, human_crops: list, threshold: float = 0.75) -> Dict[str, Any]:
         """基于人体区域embedding相似度检测穿着变化"""
         embeddings = []
