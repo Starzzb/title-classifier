@@ -317,6 +317,63 @@ class Scanner:
 
         logger.info(f"[完成] 数据库同步: 新增 {inserted}, 更新 {updated}, 无变化 {skipped}")
 
+        # 查询该目录下缺少视觉描述的记录，生成待处理 CSV
+        self._generate_vision_csv(target_path)
+
+    def _generate_vision_csv(self, target_path: Path):
+        """查询 DB 中缺少视觉描述的记录，生成 CSV 供视觉识别使用"""
+        dir_prefix = str(target_path) + "%"
+        rows = self.db_store.conn.execute(
+            """SELECT * FROM media_files
+               WHERE original_path LIKE ?
+               AND (vision_description IS NULL OR vision_description = '')
+               AND (vision_keywords IS NULL OR vision_keywords = '')""",
+            (dir_prefix,)
+        ).fetchall()
+
+        if not rows:
+            logger.info("[完成] 所有文件已完成视觉识别，无需生成 CSV")
+            return
+
+        # 生成 CSV
+        output_dir = self.output_dir / target_path.name
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_file = str(output_dir / "title_review.csv")
+
+        csv_rows = []
+        for row in rows:
+            r = dict(row)
+            csv_rows.append({
+                "original_title": r.get("original_title", ""),
+                "original_path": r.get("original_path", ""),
+                "needs_vision": "true",
+                "final_name": r.get("final_name", ""),
+                "review_status": "待确认",
+                "audio_recognized": "false",
+                "srt_path": "",
+                "vision_description": "",
+                "vision_keywords": "",
+                "vision_failed": "false",
+                "human_detected": "",
+                "detection_confidence": "",
+                "detection_timestamp": "",
+                "detection_method": "",
+                "clip_clothing": "",
+                "clip_action": "",
+                "clip_hairstyle": "",
+                "clip_tags": "",
+                "clip_tags_json": "",
+                "clip_confidence": "",
+                "clip_detail": "",
+                "vision_source": "",
+                "file_size": r.get("file_size", ""),
+                "duration": r.get("duration", ""),
+                "resolution": r.get("resolution", ""),
+            })
+
+        self._save_csv(csv_rows, output_file, append=False)
+        logger.info(f"[待视觉识别] 发现 {len(rows)} 条记录缺少视觉描述，已生成 CSV: {output_file}")
+
     def _scan_directory(self, directory: Path, exclude_dirs: List[str]) -> List[Path]:
         """递归扫描目录"""
         files = []

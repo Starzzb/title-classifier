@@ -264,6 +264,7 @@ uv run title-classifier scan -d "F:\Videos"
 uv run title-classifier scan -d "F:\Videos" --force
 
 # 同步数据库：将所有文件信息写入数据库（不生成CSV）
+# 同步完成后自动检查缺少视觉描述的记录，生成待处理 CSV
 uv run title-classifier scan -d "F:\Videos" --sync-db
 
 # 同步整个磁盘（排除系统目录）
@@ -2018,6 +2019,7 @@ uv run title-classifier vision --all -p gcli
 
 **扫描入库增强：**
 - 新增 `--sync-db` 参数：仅同步数据库，不生成 CSV（适合全盘索引）
+- `--sync-db` 同步完成后自动检查缺少视觉描述的记录，生成待处理 CSV
 - `--force` 模式自动更新数据库
 - GUI 扫描页面新增"同步数据库"选项（与"强制重新分类"互斥）
 
