@@ -13,6 +13,7 @@ from ..core.refiner import Refiner
 from ..utils.atomic_csv import atomic_write_csv, safe_read_csv
 
 DEFAULT_CSV = "data/output/title_review.csv"
+PROJECT_DIR = Path(__file__).parent.parent.parent.parent.resolve()
 
 
 class StageRefineTab(ttk.Frame):
