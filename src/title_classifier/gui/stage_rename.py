@@ -11,6 +11,7 @@ from .context import AppContext
 from .app import ToolTip
 
 PYTHON = sys.executable
+PROJECT_DIR = Path(__file__).parent.parent.parent.parent.resolve()
 
 
 class StageRenameTab(ttk.Frame):
@@ -74,7 +75,8 @@ class StageRenameTab(ttk.Frame):
 
     def _browse_csv_s2(self):
         """浏览CSV文件"""
-        file_path = filedialog.askopenfilename(title="选择CSV文件", filetypes=[("CSV文件", "*.csv")])
+        initial = Path(PROJECT_DIR) / "data" / "output"
+        file_path = filedialog.askopenfilename(title="选择CSV文件", initialdir=str(initial), filetypes=[("CSV文件", "*.csv")])
         if file_path:
             self.ctx.csv_var.set(file_path)
 

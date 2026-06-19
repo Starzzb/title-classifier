@@ -111,8 +111,8 @@ class StageRefineTab(ttk.Frame):
         columns = ("original", "needs_vision", "audio_recognized", "refined", "preview")
         self.s1b_tree = ttk.Treeview(preview_frame, columns=columns, show="headings", selectmode="extended")
         self.s1b_tree.heading("original", text="原始标题")
-        self.s1b_tree.heading("needs_vision", text="视觉")
-        self.s1b_tree.heading("audio_recognized", text="音频")
+        self.s1b_tree.heading("needs_vision", text="需要视觉")
+        self.s1b_tree.heading("audio_recognized", text="音频已识别")
         self.s1b_tree.heading("refined", text="AI优化结果")
         self.s1b_tree.heading("preview", text="最终文件名预览")
         self.s1b_tree.column("original", width=180)
@@ -171,7 +171,8 @@ class StageRefineTab(ttk.Frame):
     # ==================== 浏览 / 加载 ====================
 
     def _browse_csv(self):
-        file_path = filedialog.askopenfilename(title="选择CSV文件", filetypes=[("CSV文件", "*.csv")])
+        initial = Path(PROJECT_DIR) / "data" / "output"
+        file_path = filedialog.askopenfilename(title="选择CSV文件", initialdir=str(initial), filetypes=[("CSV文件", "*.csv")])
         if file_path:
             self.s1b_csv_var.set(file_path)
 

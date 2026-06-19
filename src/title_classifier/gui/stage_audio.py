@@ -174,7 +174,8 @@ class StageAudioTab(ttk.Frame):
 
     def _browse_csv(self):
         """浏览CSV文件（音频识别）"""
-        file_path = filedialog.askopenfilename(title="选择CSV文件", filetypes=[("CSV文件", "*.csv")])
+        initial = Path(PROJECT_DIR) / "data" / "output"
+        file_path = filedialog.askopenfilename(title="选择CSV文件", initialdir=str(initial), filetypes=[("CSV文件", "*.csv")])
         if file_path:
             self.ctx.csv_var.set(file_path)
 
