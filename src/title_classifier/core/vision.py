@@ -262,6 +262,17 @@ class VisionProcessor:
             ]
             per_frame_subtitle = self._build_per_frame_subtitle_context(frame_timestamps, subtitle_segments)
 
+        # 5.6 构建差异度提示
+        diff_hint = ""
+        if clip_diff_scores:
+            sorted_indices = sorted(range(len(clip_diff_scores)), key=lambda i: clip_diff_scores[i], reverse=True)
+            top_k = max(1, len(sorted_indices) // 3)
+            top_frames = [str(i + 1) for i in sorted_indices[:top_k]]
+            diff_hint = (
+                f"第 {', '.join(top_frames)} 帧与其他帧差异最大（场景变化最明显），"
+                f"请重点分析这些帧中的穿着、动作和场景细节。"
+            )
+
         # 6. 调用VLM（传入音频上下文和每帧字幕）
         frames_for_vlm = [selected_frames[i] for i in selected_indices if i < len(selected_frames)]
         logger.info(f"调用VLM: {len(frames_for_vlm)}帧")
@@ -271,7 +282,7 @@ class VisionProcessor:
             self._save_detection_debug(video_analysis, debug_subdir)
 
         # 构建prompt（用于调试）
-        prompt = self._build_comprehensive_prompt(title, len(frames_for_vlm), comprehensive_context, audio_context, per_frame_subtitle)
+        prompt = self._build_comprehensive_prompt(title, len(frames_for_vlm), comprehensive_context, audio_context, per_frame_subtitle, diff_hint=diff_hint)
 
         # 保存调试数据 - VLM输入帧和prompt
         if debug_subdir:
@@ -283,6 +294,7 @@ class VisionProcessor:
             comprehensive_context,
             audio_context,
             per_frame_subtitle,
+            diff_hint=diff_hint,
         )
 
         logger.info(f"VLM结果: 描述='{result.get('description', '')[:50]}...', 关键词='{result.get('keywords', '')[:50]}...'")
@@ -823,12 +835,12 @@ class VisionProcessor:
 
         return "\n".join(context_lines)
 
-    def _call_vlm_comprehensive(self, frames: List[str], title: str, context: str, audio_context: str = "", per_frame_subtitle: str = "") -> Dict:
+    def _call_vlm_comprehensive(self, frames: List[str], title: str, context: str, audio_context: str = "", per_frame_subtitle: str = "", diff_hint: str = "") -> Dict:
         """调用VLM - 全面分析模式，失败重试一次"""
         if not frames:
             return {"error": "无可用帧（所有帧提取失败）"}
 
-        prompt = self._build_comprehensive_prompt(title, len(frames), context, audio_context, per_frame_subtitle)
+        prompt = self._build_comprehensive_prompt(title, len(frames), context, audio_context, per_frame_subtitle, diff_hint=diff_hint)
 
         if len(frames) > 1:
             images_b64 = [image_to_base64(f, max_size=self.max_image_size) for f in frames]
@@ -981,7 +993,7 @@ class VisionProcessor:
 
         logger.info(f"调试汇总已保存")
 
-    def _build_comprehensive_prompt(self, title: str, n_frames: int, context: str, audio_context: str = "", per_frame_subtitle: str = "") -> str:
+    def _build_comprehensive_prompt(self, title: str, n_frames: int, context: str, audio_context: str = "", per_frame_subtitle: str = "", diff_hint: str = "") -> str:
         """构建全面分析提示词"""
         
         # 构建音频上下文部分
@@ -1001,13 +1013,19 @@ class VisionProcessor:
 {per_frame_subtitle}
 （如果某帧无对应字幕，说明该时间段没有语音内容）"""
 
+        # 差异度提示
+        diff_section = ""
+        if diff_hint:
+            diff_section = f"""
+
+【帧差异度提示】
+{diff_hint}"""
+
         return f"""{get_prompt('vision_video', 'system_header')}
 
 分析媒体文件 "{title}" 的{n_frames}个关键帧。
 
-{context}
-{audio_section}
-{subtitle_section}
+{context}{diff_section}{audio_section}{subtitle_section}
 
 【任务说明】
 {get_prompt('vision_video', 'task_instruction')}
