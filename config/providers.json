@@ -12,6 +12,6 @@
     "default_model": "mimo-v2.5"
   },
   "siliconflow": {
-    "default_model": "Qwen/Qwen3.6-35B-A3B"
+    "default_model": "nex-agi/Nex-N2-Pro"
   }
 }

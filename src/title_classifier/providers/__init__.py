@@ -84,7 +84,7 @@ DEFAULT_PROVIDERS: Dict[str, Dict[str, Any]] = {
         "type": "multi",
         "url": "https://api.xiaomimimo.com/v1/chat/completions",
         "env_key": "MIMO_API_KEY",
-        "default_model": "mimo-v2-omni",
+        "default_model": "mimo-v2.5",
         "requires_api_key": True,
         "supports_1b": False,
         "supports_1c": True,
@@ -668,7 +668,7 @@ def call_audio_api(
     if not api_key:
         return "[错误] 缺少 MIMO_API_KEY"
 
-    model = model or _resolve_stage_model({}, "audio") or "mimo-v2-omni"
+    model = model or _resolve_stage_model({}, "audio") or "mimo-v2.5"
     api_url = "https://api.xiaomimimo.com/v1/chat/completions"
 
     # 确保audio_b64带正确的前缀

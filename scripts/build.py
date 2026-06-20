@@ -204,11 +204,21 @@ def copy_additional_files():
         print("  错误: dist 目录不存在")
         return
 
-    # 复制 .env 文件（如果存在）
-    env_file = PROJECT_DIR / ".env"
-    if env_file.exists():
-        shutil.copy2(env_file, dist_app_dir / ".env")
-        print("  已复制: .env")
+    # 创建 .env.example 模板（不包含真实密钥）
+    env_example = dist_app_dir / ".env.example"
+    with open(env_example, "w", encoding="utf-8") as f:
+        f.write("# API Keys Configuration\n")
+        f.write("# Copy this file to .env and fill in your own API keys\n")
+        f.write("\n")
+        f.write("# Zhipu API\n")
+        f.write("ZHIPU_API_KEY=\n")
+        f.write("\n")
+        f.write("# Xiaomi MiMo API\n")
+        f.write("MIMO_API_KEY=\n")
+        f.write("\n")
+        f.write("# GCLI API\n")
+        f.write("GCLI_API_KEY=\n")
+    print("  已创建: .env.example")
 
     # 复制 README
     readme_file = PROJECT_DIR / "README.md"
