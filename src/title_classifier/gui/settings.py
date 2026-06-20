@@ -174,25 +174,35 @@ class SettingsDialog(ttk.Toplevel):
         model_frame.pack(fill=tk.X, pady=(8, 2))
 
         # 标题优化
-        row3 = ttk.Frame(model_frame)
-        row3.pack(fill=tk.X, pady=2)
-        ttk.Label(row3, text="标题优化:", width=12).pack(side=tk.LEFT)
-        ttk.Entry(row3, textvariable=self.model_refine_var, width=30).pack(side=tk.LEFT, padx=4)
-        ttk.Label(row3, text="Stage1b", foreground="#888888", font=("Microsoft YaHei", 8)).pack(side=tk.LEFT)
+        row_model1 = ttk.Frame(model_frame)
+        row_model1.pack(fill=tk.X, pady=2)
+        ttk.Label(row_model1, text="标题优化:", width=12).pack(side=tk.LEFT)
+        self.model_refine_combo = ttk.Combobox(row_model1, textvariable=self.model_refine_var, width=28)
+        self.model_refine_combo.pack(side=tk.LEFT, padx=4)
+        ttk.Label(row_model1, text="Stage1b", foreground="#888888", font=("Microsoft YaHei", 8)).pack(side=tk.LEFT)
 
         # 视觉识别
-        row4 = ttk.Frame(model_frame)
-        row4.pack(fill=tk.X, pady=2)
-        ttk.Label(row4, text="视觉识别:", width=12).pack(side=tk.LEFT)
-        ttk.Entry(row4, textvariable=self.model_vision_var, width=30).pack(side=tk.LEFT, padx=4)
-        ttk.Label(row4, text="Stage1c", foreground="#888888", font=("Microsoft YaHei", 8)).pack(side=tk.LEFT)
+        row_model2 = ttk.Frame(model_frame)
+        row_model2.pack(fill=tk.X, pady=2)
+        ttk.Label(row_model2, text="视觉识别:", width=12).pack(side=tk.LEFT)
+        self.model_vision_combo = ttk.Combobox(row_model2, textvariable=self.model_vision_var, width=28)
+        self.model_vision_combo.pack(side=tk.LEFT, padx=4)
+        ttk.Label(row_model2, text="Stage1c", foreground="#888888", font=("Microsoft YaHei", 8)).pack(side=tk.LEFT)
 
         # 音频识别
-        row5 = ttk.Frame(model_frame)
-        row5.pack(fill=tk.X, pady=2)
-        ttk.Label(row5, text="音频识别:", width=12).pack(side=tk.LEFT)
-        ttk.Entry(row5, textvariable=self.model_audio_var, width=30).pack(side=tk.LEFT, padx=4)
-        ttk.Label(row5, text="Stage1d", foreground="#888888", font=("Microsoft YaHei", 8)).pack(side=tk.LEFT)
+        row_model3 = ttk.Frame(model_frame)
+        row_model3.pack(fill=tk.X, pady=2)
+        ttk.Label(row_model3, text="音频识别:", width=12).pack(side=tk.LEFT)
+        self.model_audio_combo = ttk.Combobox(row_model3, textvariable=self.model_audio_var, width=28)
+        self.model_audio_combo.pack(side=tk.LEFT, padx=4)
+        ttk.Label(row_model3, text="Stage1d", foreground="#888888", font=("Microsoft YaHei", 8)).pack(side=tk.LEFT)
+
+        # 获取模型列表按钮
+        row_fetch = ttk.Frame(model_frame)
+        row_fetch.pack(fill=tk.X, pady=(4, 0))
+        ttk.Button(row_fetch, text="获取可用模型列表", command=self._fetch_available_models, bootstyle="info-outline").pack(side=tk.LEFT, padx=4)
+        self.model_fetch_label = ttk.Label(row_fetch, text="", foreground="#888888", font=("Microsoft YaHei", 8))
+        self.model_fetch_label.pack(side=tk.LEFT, padx=4)
 
         # 超时
         row_timeout = ttk.Frame(frame)
@@ -385,6 +395,74 @@ class SettingsDialog(ttk.Toplevel):
                 messagebox.showinfo("完成", "已恢复默认设置", parent=self)
             except Exception as e:
                 messagebox.showerror("错误", f"恢复失败: {e}", parent=self)
+
+    def _fetch_available_models(self):
+        """从当前 Provider 获取可用模型列表"""
+        import threading
+        provider = self.provider_var.get()
+        if not provider:
+            messagebox.showwarning("提示", "请先选择 Provider")
+            return
+
+        self.model_fetch_label.configure(text="获取中...", foreground="#888888")
+
+        def do_fetch():
+            try:
+                from ..providers import get_provider_config, get_api_key
+                import json, ssl, http.client
+                from urllib.parse import urlparse
+
+                config = get_provider_config(provider)
+                api_key = get_api_key(provider)
+                api_url = config.get("url", "")
+                if not api_url:
+                    raise Exception("URL 为空")
+
+                parsed = urlparse(api_url)
+                models_url = f"{parsed.scheme}://{parsed.hostname}/v1/models"
+
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+
+                conn = http.client.HTTPSConnection(parsed.hostname, context=ctx, timeout=15)
+                headers = {"Content-Type": "application/json"}
+                if api_key:
+                    headers["Authorization"] = "Bearer " + api_key
+
+                conn.request("GET", "/v1/models", headers=headers)
+                resp = conn.getresponse()
+                data = resp.read().decode()
+                conn.close()
+
+                if resp.status != 200:
+                    raise Exception(f"HTTP {resp.status}")
+
+                result = json.loads(data)
+                model_list = [m.get("id", "") for m in result.get("data", [])]
+
+                def update_ui():
+                    if model_list:
+                        self.model_refine_combo["values"] = model_list
+                        self.model_vision_combo["values"] = model_list
+                        self.model_audio_combo["values"] = model_list
+                        self.model_fetch_label.configure(
+                            text=f"已获取 {len(model_list)} 个模型",
+                            foreground="#28a745"
+                        )
+                    else:
+                        self.model_fetch_label.configure(text="无可用模型", foreground="#dc3545")
+                self.after(0, update_ui)
+
+            except Exception as e:
+                def show_error():
+                    self.model_fetch_label.configure(
+                        text=f"获取失败: {str(e)[:30]}",
+                        foreground="#dc3545"
+                    )
+                self.after(0, show_error)
+
+        threading.Thread(target=do_fetch, daemon=True).start()
 
     def _toggle_api_key_visibility(self):
         """切换 API Key 显示/隐藏"""
