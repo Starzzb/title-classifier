@@ -316,6 +316,20 @@ def get_provider_display_name(provider_name: str) -> str:
 # ==================== 统一 API 调用函数 ====================
 
 
+def _resolve_stage_model(provider_config: dict, stage: str = None) -> str:
+    """获取阶段特定模型，fallback 到 provider 默认模型"""
+    if stage:
+        try:
+            from ..utils.config import load_merged_config
+            cfg = load_merged_config()
+            stage_model = cfg.get("providers", {}).get("models", {}).get(stage, "")
+            if stage_model:
+                return stage_model
+        except Exception:
+            pass
+    return provider_config.get("default_model", "")
+
+
 def call_text_api(
     provider_name: str,
     prompt: str,
@@ -342,7 +356,7 @@ def call_text_api(
     if not config:
         return f"[错误] Provider '{provider_name}' 不存在"
 
-    model = model or config.get("default_model", "")
+    model = model or _resolve_stage_model(config, "refine")
     api_key = api_key or get_api_key(provider_name)
     api_url = config.get("url", "")
 
@@ -436,7 +450,7 @@ def call_vision_api(
     if not config:
         return f"[错误] Provider '{provider_name}' 不存在"
 
-    model = model or config.get("default_model", "")
+    model = model or _resolve_stage_model(config, "vision")
     api_key = api_key or get_api_key(provider_name)
     api_url = config.get("url", "")
 
@@ -654,7 +668,7 @@ def call_audio_api(
     if not api_key:
         return "[错误] 缺少 MIMO_API_KEY"
 
-    model = model or "mimo-v2-omni"
+    model = model or _resolve_stage_model({}, "audio") or "mimo-v2-omni"
     api_url = "https://api.xiaomimimo.com/v1/chat/completions"
 
     # 确保audio_b64带正确的前缀

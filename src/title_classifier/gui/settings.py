@@ -16,7 +16,7 @@ class SettingsDialog(ttk.Toplevel):
     def __init__(self, parent, ctx: AppContext):
         super().__init__(parent)
         self.title("设置")
-        self.geometry("500x600")
+        self.geometry("520x680")
         self.minsize(450, 500)
         self.transient(parent)
         self.grab_set()
@@ -55,8 +55,12 @@ class SettingsDialog(ttk.Toplevel):
         # API
         self.provider_var = tk.StringVar()
         self.api_key_var = tk.StringVar()
-        self.model_var = tk.StringVar()
         self.timeout_var = tk.StringVar()
+
+        # 分阶段模型配置
+        self.model_refine_var = tk.StringVar()
+        self.model_vision_var = tk.StringVar()
+        self.model_audio_var = tk.StringVar()
 
         # 推理
         self.device_var = tk.StringVar()
@@ -165,17 +169,36 @@ class SettingsDialog(ttk.Toplevel):
         self.api_key_entry.pack(side=tk.LEFT, padx=4)
         ttk.Button(row2, text="显示", width=5, command=self._toggle_api_key_visibility).pack(side=tk.LEFT)
 
-        # 模型
-        row3 = ttk.Frame(frame)
+        # 分阶段模型配置
+        model_frame = ttk.LabelFrame(frame, text="各阶段模型（留空则使用 Provider 默认模型）")
+        model_frame.pack(fill=tk.X, pady=(8, 2))
+
+        # 标题优化
+        row3 = ttk.Frame(model_frame)
         row3.pack(fill=tk.X, pady=2)
-        ttk.Label(row3, text="模型:", width=12).pack(side=tk.LEFT)
-        ttk.Entry(row3, textvariable=self.model_var, width=30).pack(side=tk.LEFT, padx=4)
+        ttk.Label(row3, text="标题优化:", width=12).pack(side=tk.LEFT)
+        ttk.Entry(row3, textvariable=self.model_refine_var, width=30).pack(side=tk.LEFT, padx=4)
+        ttk.Label(row3, text="Stage1b", foreground="#888888", font=("Microsoft YaHei", 8)).pack(side=tk.LEFT)
+
+        # 视觉识别
+        row4 = ttk.Frame(model_frame)
+        row4.pack(fill=tk.X, pady=2)
+        ttk.Label(row4, text="视觉识别:", width=12).pack(side=tk.LEFT)
+        ttk.Entry(row4, textvariable=self.model_vision_var, width=30).pack(side=tk.LEFT, padx=4)
+        ttk.Label(row4, text="Stage1c", foreground="#888888", font=("Microsoft YaHei", 8)).pack(side=tk.LEFT)
+
+        # 音频识别
+        row5 = ttk.Frame(model_frame)
+        row5.pack(fill=tk.X, pady=2)
+        ttk.Label(row5, text="音频识别:", width=12).pack(side=tk.LEFT)
+        ttk.Entry(row5, textvariable=self.model_audio_var, width=30).pack(side=tk.LEFT, padx=4)
+        ttk.Label(row5, text="Stage1d", foreground="#888888", font=("Microsoft YaHei", 8)).pack(side=tk.LEFT)
 
         # 超时
-        row4 = ttk.Frame(frame)
-        row4.pack(fill=tk.X, pady=2)
-        ttk.Label(row4, text="超时(秒):", width=12).pack(side=tk.LEFT)
-        ttk.Entry(row4, textvariable=self.timeout_var, width=6).pack(side=tk.LEFT, padx=4)
+        row_timeout = ttk.Frame(frame)
+        row_timeout.pack(fill=tk.X, pady=2)
+        ttk.Label(row_timeout, text="超时(秒):", width=12).pack(side=tk.LEFT)
+        ttk.Entry(row_timeout, textvariable=self.timeout_var, width=6).pack(side=tk.LEFT, padx=4)
 
         # 高级配置按钮
         row5 = ttk.Frame(frame)
@@ -269,8 +292,12 @@ class SettingsDialog(ttk.Toplevel):
         # API
         self.provider_var.set(get_config_value(c, "providers.default", "gcli"))
         self.api_key_var.set(get_config_value(c, "api.key", ""))
-        self.model_var.set(get_config_value(c, "providers.default_model", ""))
         self.timeout_var.set(str(get_config_value(c, "providers.timeout", 90)))
+
+        # 分阶段模型
+        self.model_refine_var.set(get_config_value(c, "providers.models.refine", ""))
+        self.model_vision_var.set(get_config_value(c, "providers.models.vision", ""))
+        self.model_audio_var.set(get_config_value(c, "providers.models.audio", ""))
 
         # 推理
         self.device_var.set(get_config_value(c, "general.device", "auto"))
@@ -296,6 +323,11 @@ class SettingsDialog(ttk.Toplevel):
             "providers": {
                 "default": self.provider_var.get(),
                 "timeout": int(self.timeout_var.get() or 90),
+                "models": {
+                    "refine": self.model_refine_var.get(),
+                    "vision": self.model_vision_var.get(),
+                    "audio": self.model_audio_var.get(),
+                },
             },
             "api": {
                 "key": self.api_key_var.get(),
