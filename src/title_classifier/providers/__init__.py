@@ -480,7 +480,7 @@ def call_vision_api(
         ],
         "temperature": temperature,
         "reasoning": {"enabled": False},
-        "max_tokens": 2048,
+        "max_tokens": 8192,
         "stream": False,
     }
 
@@ -491,6 +491,12 @@ def call_vision_api(
             result = _http_request(api_url, payload, api_key, timeout)
             elapsed = time.perf_counter() - t_start
             content = result.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+
+            # 如果是推理模型，content 为空时尝试从 reasoning_content 提取
+            if not content:
+                reasoning = result.get("choices", [{}])[0].get("message", {}).get("reasoning_content", "")
+                if reasoning:
+                    logger.debug(f"推理模型输出全部进入 reasoning_content ({len(reasoning)} chars)，content 为空")
 
             # 提取 token 用量信息
             usage = result.get("usage", {})
