@@ -273,12 +273,20 @@ class VisionProcessor:
             ]
             per_frame_subtitle = self._build_per_frame_subtitle_context(frame_timestamps, subtitle_segments)
 
-        # 5.6 构建差异度提示
+        # 5.6 构建差异度提示（基于选中帧的 VLM 编号）
         diff_hint = ""
         if clip_diff_scores:
-            sorted_indices = sorted(range(len(clip_diff_scores)), key=lambda i: clip_diff_scores[i], reverse=True)
-            top_k = max(1, len(sorted_indices) // 3)
-            top_frames = [str(i + 1) for i in sorted_indices[:top_k]]
+            # 取选中帧的差异度分数，映射到 VLM 编号（1-based）
+            selected_diff = []
+            for vlm_idx, orig_idx in enumerate(selected_indices):
+                if orig_idx < len(clip_diff_scores):
+                    selected_diff.append((vlm_idx + 1, clip_diff_scores[orig_idx]))
+
+            # 按差异度排序，取前 1/3
+            selected_diff.sort(key=lambda x: x[1], reverse=True)
+            top_k = max(1, len(selected_diff) // 3)
+            top_frames = [str(vlm_num) for vlm_num, _ in selected_diff[:top_k]]
+
             diff_hint = (
                 f"第 {', '.join(top_frames)} 帧与其他帧差异最大（场景变化最明显），"
                 f"请重点分析这些帧中的穿着、动作和场景细节。"
