@@ -71,7 +71,7 @@ fallback_on_error = true
 
 [yolo.comprehensive.custom_weights]
 detect = 0.25
-pose = 0.50
+pose = 0.5
 segment = 0.25
 
 [clip]
@@ -85,6 +85,11 @@ timeout = 90
 retries = 3
 batch_size = 3
 delay = 2.0
+
+[providers.stage_providers]
+refine = "gcli"
+vision = "gcli"
+audio = "mimo"
 
 [audio]
 enabled = true
