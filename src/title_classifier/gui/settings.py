@@ -52,15 +52,14 @@ class SettingsDialog(ttk.Toplevel):
         self.theme_var = tk.StringVar()
         self.font_size_var = tk.StringVar()
 
-        # API
-        self.provider_var = tk.StringVar()
-        self.api_key_var = tk.StringVar()
+        # 分阶段 Provider + Model 配置
+        self.stage_refine_provider_var = tk.StringVar()
+        self.stage_refine_model_var = tk.StringVar()
+        self.stage_vision_provider_var = tk.StringVar()
+        self.stage_vision_model_var = tk.StringVar()
+        self.stage_audio_provider_var = tk.StringVar()
+        self.stage_audio_model_var = tk.StringVar()
         self.timeout_var = tk.StringVar()
-
-        # 分阶段模型配置
-        self.model_refine_var = tk.StringVar()
-        self.model_vision_var = tk.StringVar()
-        self.model_audio_var = tk.StringVar()
 
         # 推理
         self.device_var = tk.StringVar()
@@ -146,91 +145,125 @@ class SettingsDialog(ttk.Toplevel):
         ttk.Entry(row2, textvariable=self.font_size_var, width=6).pack(side=tk.LEFT, padx=4)
 
     def _build_api_section(self, parent):
-        """API 配置区块"""
-        frame = ttk.LabelFrame(parent, text="API 配置")
+        """API 配置区块 — 每阶段独立 Provider + Model"""
+        frame = ttk.LabelFrame(parent, text="模型配置")
         frame.pack(fill=tk.X, pady=(0, 10), padx=10)
 
-        # Provider
-        row1 = ttk.Frame(frame)
-        row1.pack(fill=tk.X, pady=2)
-        ttk.Label(row1, text="Provider:", width=12).pack(side=tk.LEFT)
-        try:
-            from ..providers import get_providers_for_gui
-            providers = get_providers_for_gui()
-        except Exception:
-            providers = ["gcli", "mimo", "zhipu", "ollama"]
-        ttk.Combobox(row1, textvariable=self.provider_var, values=providers, state="readonly", width=20).pack(side=tk.LEFT, padx=4)
+        stages = [
+            ("标题优化 (Refine)", "refine", self.stage_refine_provider_var, self.stage_refine_model_var),
+            ("视觉识别 (Vision)", "vision", self.stage_vision_provider_var, self.stage_vision_model_var),
+            ("音频识别 (Audio)", "audio", self.stage_audio_provider_var, self.stage_audio_model_var),
+        ]
 
-        # API Key
-        row2 = ttk.Frame(frame)
-        row2.pack(fill=tk.X, pady=2)
-        ttk.Label(row2, text="API Key:", width=12).pack(side=tk.LEFT)
-        self.api_key_entry = ttk.Entry(row2, textvariable=self.api_key_var, show="*", width=30)
-        self.api_key_entry.pack(side=tk.LEFT, padx=4)
-        ttk.Button(row2, text="显示", width=5, command=self._toggle_api_key_visibility).pack(side=tk.LEFT)
+        self._stage_model_combos = {}
 
-        # 分阶段模型配置
-        model_frame = ttk.LabelFrame(frame, text="各阶段模型（留空则使用 Provider 默认模型）")
-        model_frame.pack(fill=tk.X, pady=(8, 2))
+        for label, stage_key, provider_var, model_var in stages:
+            row = ttk.Frame(frame)
+            row.pack(fill=tk.X, pady=4)
 
-        # 标题优化
-        row_model1 = ttk.Frame(model_frame)
-        row_model1.pack(fill=tk.X, pady=2)
-        ttk.Label(row_model1, text="标题优化:", width=12).pack(side=tk.LEFT)
-        self.model_refine_combo = ttk.Combobox(row_model1, textvariable=self.model_refine_var, width=28)
-        self.model_refine_combo.pack(side=tk.LEFT, padx=4)
-        ttk.Label(row_model1, text="Stage1b", foreground="#888888", font=("Microsoft YaHei", 8)).pack(side=tk.LEFT)
+            ttk.Label(row, text=f"{label}:", width=16).pack(side=tk.LEFT)
 
-        # 视觉识别
-        row_model2 = ttk.Frame(model_frame)
-        row_model2.pack(fill=tk.X, pady=2)
-        ttk.Label(row_model2, text="视觉识别:", width=12).pack(side=tk.LEFT)
-        self.model_vision_combo = ttk.Combobox(row_model2, textvariable=self.model_vision_var, width=28)
-        self.model_vision_combo.pack(side=tk.LEFT, padx=4)
-        ttk.Label(row_model2, text="Stage1c", foreground="#888888", font=("Microsoft YaHei", 8)).pack(side=tk.LEFT)
+            # Provider dropdown
+            try:
+                from ..providers import get_providers_for_gui
+                providers = get_providers_for_gui(stage_key)
+            except Exception:
+                providers = ["gcli", "mimo"]
+            provider_combo = ttk.Combobox(row, textvariable=provider_var, values=providers, state="readonly", width=12)
+            provider_combo.pack(side=tk.LEFT, padx=4)
 
-        # 音频识别
-        row_model3 = ttk.Frame(model_frame)
-        row_model3.pack(fill=tk.X, pady=2)
-        ttk.Label(row_model3, text="音频识别:", width=12).pack(side=tk.LEFT)
-        self.model_audio_combo = ttk.Combobox(row_model3, textvariable=self.model_audio_var, width=28)
-        self.model_audio_combo.pack(side=tk.LEFT, padx=4)
-        ttk.Label(row_model3, text="Stage1d", foreground="#888888", font=("Microsoft YaHei", 8)).pack(side=tk.LEFT)
+            # Model dropdown
+            model_combo = ttk.Combobox(row, textvariable=model_var, width=28)
+            model_combo.pack(side=tk.LEFT, padx=4)
+            self._stage_model_combos[stage_key] = model_combo
 
-        # 获取模型列表按钮
-        row_fetch = ttk.Frame(model_frame)
-        row_fetch.pack(fill=tk.X, pady=(4, 0))
-        ttk.Button(row_fetch, text="获取可用模型列表", command=self._fetch_available_models, bootstyle="info-outline").pack(side=tk.LEFT, padx=4)
-        self.model_fetch_label = ttk.Label(row_fetch, text="", foreground="#888888", font=("Microsoft YaHei", 8))
-        self.model_fetch_label.pack(side=tk.LEFT, padx=4)
+            # Fetch button
+            ttk.Button(row, text="🔄", width=3,
+                       command=lambda s=stage_key, pv=provider_var: self._fetch_models_for_stage(s, pv)).pack(side=tk.LEFT, padx=2)
+
+            # Update model list when provider changes
+            provider_combo.bind("<<ComboboxSelected>>",
+                                lambda e, s=stage_key, pv=provider_var: self._on_provider_changed(s, pv))
 
         # 超时
         row_timeout = ttk.Frame(frame)
-        row_timeout.pack(fill=tk.X, pady=2)
-        ttk.Label(row_timeout, text="超时(秒):", width=12).pack(side=tk.LEFT)
+        row_timeout.pack(fill=tk.X, pady=(8, 2))
+        ttk.Label(row_timeout, text="API 超时(秒):", width=16).pack(side=tk.LEFT)
         ttk.Entry(row_timeout, textvariable=self.timeout_var, width=6).pack(side=tk.LEFT, padx=4)
 
         # 高级配置按钮
-        row5 = ttk.Frame(frame)
-        row5.pack(fill=tk.X, pady=(10, 0))
-        ttk.Button(
-            row5,
-            text="高级 API 配置...",
-            command=self._open_api_config,
-            bootstyle=INFO
-        ).pack(side=tk.LEFT)
-
-        ttk.Label(
-            row5,
-            text="配置所有 Provider 的 URL 和 API Key",
-            foreground="#888888",
-            font=("Microsoft YaHei", 8)
-        ).pack(side=tk.LEFT, padx=10)
+        row_adv = ttk.Frame(frame)
+        row_adv.pack(fill=tk.X, pady=(10, 0))
+        ttk.Button(row_adv, text="高级 API 配置...", command=self._open_api_config, bootstyle=INFO).pack(side=tk.LEFT)
+        ttk.Label(row_adv, text="配置各 Provider 的 URL、API Key", foreground="#888888", font=("Microsoft YaHei", 8)).pack(side=tk.LEFT, padx=10)
 
     def _open_api_config(self):
         """打开 API 配置对话框"""
         from .api_config import APIConfigDialog
         APIConfigDialog(self)
+
+    def _on_provider_changed(self, stage_key, provider_var):
+        """切换 Provider 时清空 Model"""
+        self._stage_model_combos[stage_key].set("")
+
+    def _fetch_models_for_stage(self, stage_key, provider_var):
+        """获取指定阶段 Provider 的模型列表"""
+        import threading
+        provider = provider_var.get()
+        if not provider:
+            messagebox.showwarning("提示", "请先选择 Provider", parent=self)
+            return
+
+        combo = self._stage_model_combos[stage_key]
+
+        def do_fetch():
+            try:
+                from ..providers import get_provider_config, get_api_key
+                import json, ssl, http.client
+                from urllib.parse import urlparse
+
+                config = get_provider_config(provider)
+                api_key = get_api_key(provider)
+                api_url = config.get("url", "")
+                if not api_url:
+                    raise Exception("URL 为空")
+
+                parsed = urlparse(api_url)
+                models_url = f"{parsed.scheme}://{parsed.hostname}/v1/models"
+
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+
+                conn = http.client.HTTPSConnection(parsed.hostname, context=ctx, timeout=15)
+                headers = {"Content-Type": "application/json"}
+                if api_key:
+                    headers["Authorization"] = "Bearer " + api_key
+
+                conn.request("GET", "/v1/models", headers=headers)
+                resp = conn.getresponse()
+                data = resp.read().decode()
+                conn.close()
+
+                if resp.status != 200:
+                    raise Exception(f"HTTP {resp.status}")
+
+                result = json.loads(data)
+                model_list = [m.get("id", "") for m in result.get("data", [])]
+
+                def update_ui():
+                    if model_list:
+                        combo["values"] = model_list
+                    else:
+                        messagebox.showinfo("提示", "无可用模型", parent=self)
+                self.after(0, update_ui)
+
+            except Exception as e:
+                def show_error():
+                    messagebox.showerror("错误", f"获取模型失败: {e}", parent=self)
+                self.after(0, show_error)
+
+        threading.Thread(target=do_fetch, daemon=True).start()
 
     def _build_inference_section(self, parent):
         """推理配置区块"""
@@ -299,15 +332,14 @@ class SettingsDialog(ttk.Toplevel):
         self.theme_var.set(get_config_value(c, "theme.name", "solar"))
         self.font_size_var.set(str(get_config_value(c, "theme.font_size", "10")))
 
-        # API
-        self.provider_var.set(get_config_value(c, "providers.default", "gcli"))
-        self.api_key_var.set(get_config_value(c, "api.key", ""))
+        # 分阶段 Provider + Model
+        self.stage_refine_provider_var.set(get_config_value(c, "providers.stage_providers.refine", "gcli"))
+        self.stage_refine_model_var.set(get_config_value(c, "providers.models.refine", ""))
+        self.stage_vision_provider_var.set(get_config_value(c, "providers.stage_providers.vision", "gcli"))
+        self.stage_vision_model_var.set(get_config_value(c, "providers.models.vision", ""))
+        self.stage_audio_provider_var.set(get_config_value(c, "providers.stage_providers.audio", "mimo"))
+        self.stage_audio_model_var.set(get_config_value(c, "providers.models.audio", ""))
         self.timeout_var.set(str(get_config_value(c, "providers.timeout", 90)))
-
-        # 分阶段模型
-        self.model_refine_var.set(get_config_value(c, "providers.models.refine", ""))
-        self.model_vision_var.set(get_config_value(c, "providers.models.vision", ""))
-        self.model_audio_var.set(get_config_value(c, "providers.models.audio", ""))
 
         # 推理
         self.device_var.set(get_config_value(c, "general.device", "auto"))
@@ -331,16 +363,17 @@ class SettingsDialog(ttk.Toplevel):
                 "font_size": int(self.font_size_var.get() or 10),
             },
             "providers": {
-                "default": self.provider_var.get(),
                 "timeout": int(self.timeout_var.get() or 90),
-                "models": {
-                    "refine": self.model_refine_var.get(),
-                    "vision": self.model_vision_var.get(),
-                    "audio": self.model_audio_var.get(),
+                "stage_providers": {
+                    "refine": self.stage_refine_provider_var.get(),
+                    "vision": self.stage_vision_provider_var.get(),
+                    "audio": self.stage_audio_provider_var.get(),
                 },
-            },
-            "api": {
-                "key": self.api_key_var.get(),
+                "models": {
+                    "refine": self.stage_refine_model_var.get(),
+                    "vision": self.stage_vision_model_var.get(),
+                    "audio": self.stage_audio_model_var.get(),
+                },
             },
             "general": {
                 "device": self.device_var.get(),
@@ -395,81 +428,6 @@ class SettingsDialog(ttk.Toplevel):
                 messagebox.showinfo("完成", "已恢复默认设置", parent=self)
             except Exception as e:
                 messagebox.showerror("错误", f"恢复失败: {e}", parent=self)
-
-    def _fetch_available_models(self):
-        """从当前 Provider 获取可用模型列表"""
-        import threading
-        provider = self.provider_var.get()
-        if not provider:
-            messagebox.showwarning("提示", "请先选择 Provider")
-            return
-
-        self.model_fetch_label.configure(text="获取中...", foreground="#888888")
-
-        def do_fetch():
-            try:
-                from ..providers import get_provider_config, get_api_key
-                import json, ssl, http.client
-                from urllib.parse import urlparse
-
-                config = get_provider_config(provider)
-                api_key = get_api_key(provider)
-                api_url = config.get("url", "")
-                if not api_url:
-                    raise Exception("URL 为空")
-
-                parsed = urlparse(api_url)
-                models_url = f"{parsed.scheme}://{parsed.hostname}/v1/models"
-
-                ctx = ssl.create_default_context()
-                ctx.check_hostname = False
-                ctx.verify_mode = ssl.CERT_NONE
-
-                conn = http.client.HTTPSConnection(parsed.hostname, context=ctx, timeout=15)
-                headers = {"Content-Type": "application/json"}
-                if api_key:
-                    headers["Authorization"] = "Bearer " + api_key
-
-                conn.request("GET", "/v1/models", headers=headers)
-                resp = conn.getresponse()
-                data = resp.read().decode()
-                conn.close()
-
-                if resp.status != 200:
-                    raise Exception(f"HTTP {resp.status}")
-
-                result = json.loads(data)
-                model_list = [m.get("id", "") for m in result.get("data", [])]
-
-                def update_ui():
-                    if model_list:
-                        self.model_refine_combo["values"] = model_list
-                        self.model_vision_combo["values"] = model_list
-                        self.model_audio_combo["values"] = model_list
-                        self.model_fetch_label.configure(
-                            text=f"已获取 {len(model_list)} 个模型",
-                            foreground="#28a745"
-                        )
-                    else:
-                        self.model_fetch_label.configure(text="无可用模型", foreground="#dc3545")
-                self.after(0, update_ui)
-
-            except Exception as e:
-                def show_error():
-                    self.model_fetch_label.configure(
-                        text=f"获取失败: {str(e)[:30]}",
-                        foreground="#dc3545"
-                    )
-                self.after(0, show_error)
-
-        threading.Thread(target=do_fetch, daemon=True).start()
-
-    def _toggle_api_key_visibility(self):
-        """切换 API Key 显示/隐藏"""
-        if self.api_key_entry.cget("show") == "*":
-            self.api_key_entry.configure(show="")
-        else:
-            self.api_key_entry.configure(show="*")
 
     def _browse_debug_dir(self):
         """浏览调试目录"""
