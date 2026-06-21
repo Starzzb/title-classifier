@@ -668,18 +668,20 @@ def call_audio_api(
     prompt: str = None,
     model: str = None,
     api_key: str = None,
+    provider_name: str = "mimo",
     timeout: int = 120,
     retries: int = 3,
     reasoning_retries: int = 2,
 ) -> str:
     """
-    调用mimo音频理解API
+    调用音频理解API
 
     Args:
         audio_b64: Base64编码的音频（纯base64或带前缀均可）
         prompt: 提示词（可选，使用默认提示词）
         model: 模型名称（可选，默认mimo-v2-omni）
         api_key: API Key（可选，从环境变量获取）
+        provider_name: 提供商名称（可选，默认mimo）
         timeout: 超时时间
         retries: 网络重试次数
         reasoning_retries: 思维链重试次数（检测到推理输出时用加强prompt重试）
@@ -687,12 +689,13 @@ def call_audio_api(
     Returns:
         音频描述文本
     """
-    api_key = api_key or get_api_key("mimo")
+    api_key = api_key or get_api_key(provider_name)
     if not api_key:
-        return "[错误] 缺少 MIMO_API_KEY"
+        return f"[错误] 缺少 {provider_name.upper()}_API_KEY"
 
-    model = model or _resolve_stage_model({}, "audio") or "mimo-v2.5"
-    api_url = "https://api.xiaomimimo.com/v1/chat/completions"
+    provider_config = get_provider_config(provider_name) or {}
+    model = model or _resolve_stage_model(provider_config, "audio") or "mimo-v2.5"
+    api_url = f"{provider_config.get('url', '')}/v1/chat/completions"
 
     # 确保audio_b64带正确的前缀
     if not audio_b64.startswith("data:"):
