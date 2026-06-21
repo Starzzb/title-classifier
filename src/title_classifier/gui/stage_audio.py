@@ -49,17 +49,6 @@ class StageAudioTab(ttk.Frame):
         ttk.Button(csv_frame, text="浏览...", command=self._browse_csv).pack(side=tk.LEFT, padx=4)
         ToolTip(csv_entry, "Stage1生成的CSV文件，音频识别会处理needs_vision=TRUE的行")
 
-        # Provider选择
-        provider_frame = ttk.LabelFrame(tab, text="AI Provider")
-        provider_frame.pack(fill=tk.X, padx=4, pady=4)
-
-        self.s1ca_provider_var = tk.StringVar(value="mimo")
-        from ..providers import get_providers_for_gui
-        providers = get_providers_for_gui("audio")
-        provider_combo = ttk.Combobox(provider_frame, textvariable=self.s1ca_provider_var, values=providers, state="readonly")
-        provider_combo.pack(side=tk.LEFT, padx=4)
-        ToolTip(provider_combo, "选择音频AI服务提供商\n- mimo: 小米MiMo（推荐，支持音频理解）")
-
         # 音频配置
         audio_frame = ttk.LabelFrame(tab, text="音频配置")
         audio_frame.pack(fill=tk.X, padx=4, pady=4)
@@ -198,7 +187,9 @@ class StageAudioTab(ttk.Frame):
     def _run_audio(self):
         """运行音频识别"""
         csv_path = self.ctx.csv_var.get()
-        provider = self.s1ca_provider_var.get()
+        from ..utils.config import load_merged_config, get_config_value
+        cfg = load_merged_config()
+        provider = get_config_value(cfg, "providers.stage_providers.audio", "mimo")
 
         # 保存音频配置
         self._save_audio_config_from_gui()
