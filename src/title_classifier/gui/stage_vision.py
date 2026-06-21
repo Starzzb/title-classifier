@@ -13,7 +13,6 @@ from ttkbootstrap.constants import *
 from .context import AppContext
 from .app import ToolTip
 
-from ..providers import get_providers_for_gui
 from ..utils.file_resolve import resolve_media_path
 
 PROJECT_DIR = Path(__file__).parent.parent.parent.parent.resolve()
@@ -106,12 +105,7 @@ class StageVisionTab(ttk.Frame):
         ttk.Entry(top_bar, textvariable=self.ctx.csv_var, width=50).pack(side=tk.LEFT, padx=2)
         ttk.Button(top_bar, text="浏览", width=5, command=self._browse_csv).pack(side=tk.LEFT, padx=2)
 
-        ttk.Separator(top_bar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
 
-        ttk.Label(top_bar, text="AI:").pack(side=tk.LEFT, padx=(0, 2))
-        self.s1c_provider_var = tk.StringVar(value="gcli")
-        providers = get_providers_for_gui("1c")
-        ttk.Combobox(top_bar, textvariable=self.s1c_provider_var, values=providers, state="readonly", width=8).pack(side=tk.LEFT, padx=2)
 
         # ===== 折叠区1: 推理配置（默认展开） =====
         sec1 = CollapsibleFrame(scroll_frame, text="推理配置", expanded=True)
@@ -244,7 +238,9 @@ class StageVisionTab(ttk.Frame):
     def _run_vision(self):
         """运行视觉识别"""
         csv = self.ctx.csv_var.get()
-        provider = self.s1c_provider_var.get()
+        from ..utils.config import load_merged_config, get_config_value
+        cfg = load_merged_config()
+        provider = get_config_value(cfg, "providers.stage_providers.vision", "gcli")
         device = self.s1c_device_var.get()
         backend = self.s1c_backend_var.get()
 
@@ -332,7 +328,9 @@ class StageVisionTab(ttk.Frame):
     def _run_vision_retry(self):
         """重试失败的视觉识别行"""
         csv = self.ctx.csv_var.get()
-        provider = self.s1c_provider_var.get()
+        from ..utils.config import load_merged_config, get_config_value
+        cfg = load_merged_config()
+        provider = get_config_value(cfg, "providers.stage_providers.vision", "gcli")
         device = self.s1c_device_var.get()
         backend = self.s1c_backend_var.get()
 
