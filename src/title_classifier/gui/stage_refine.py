@@ -8,7 +8,6 @@ import threading
 from collections import deque
 
 from .app import ToolTip
-from ..providers import get_providers_for_gui
 from ..core.refiner import Refiner
 from ..utils.atomic_csv import atomic_write_csv, safe_read_csv
 
@@ -27,7 +26,6 @@ class StageRefineTab(ttk.Frame):
 
         # 实例变量
         self.s1b_csv_var = self.ctx.csv_var
-        self.s1b_provider_var = tk.StringVar(value="gcli")
         self.s1b_progress_var = tk.DoubleVar(value=0.0)
         self.s1b_results = {}
         self.s1b_modified = set()
@@ -55,10 +53,6 @@ class StageRefineTab(ttk.Frame):
         ttk.Button(file_bar, text="加载", width=5, command=self._load_preview).pack(side=tk.LEFT, padx=2)
 
         ttk.Separator(file_bar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
-
-        ttk.Label(file_bar, text="AI:").pack(side=tk.LEFT, padx=(0, 2))
-        providers = get_providers_for_gui("1b")
-        ttk.Combobox(file_bar, textvariable=self.s1b_provider_var, values=providers, state="readonly", width=8).pack(side=tk.LEFT, padx=2)
 
         self.s1b_modified_label = ttk.Label(file_bar, text="已修改 0/0", foreground="#888888")
         self.s1b_modified_label.pack(side=tk.RIGHT, padx=8)
@@ -381,7 +375,9 @@ class StageRefineTab(ttk.Frame):
         self._run_refine(list(all_items))
 
     def _run_refine(self, item_ids):
-        provider = self.s1b_provider_var.get()
+        from ..utils.config import load_merged_config, get_config_value
+        cfg = load_merged_config()
+        provider = get_config_value(cfg, "providers.stage_providers.refine", "gcli")
 
         items_to_refine = []
         for item_id in item_ids:
