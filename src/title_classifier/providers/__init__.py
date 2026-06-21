@@ -176,6 +176,8 @@ def get_available_providers(stage: str = "1b") -> List[Dict[str, Any]]:
             continue
         if stage == "1c" and not config.get("supports_1c", False):
             continue
+        if stage == "audio" and not config.get("supports_audio", False):
+            continue
 
         # 检查 API Key 是否可用
         if config.get("requires_api_key", False):
