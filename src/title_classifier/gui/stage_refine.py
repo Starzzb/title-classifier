@@ -61,20 +61,9 @@ class StageRefineTab(ttk.Frame):
         btn_bar = ttk.Frame(self)
         btn_bar.pack(fill=tk.X, padx=4, pady=(0, 2))
 
-        # -- AI操作组 --
-        ai_group = ttk.LabelFrame(btn_bar, text="AI操作")
-        ai_group.pack(side=tk.LEFT, padx=(0, 4))
-
-        ttk.Button(ai_group, text="优化选中", command=self._run_refine_selected).pack(side=tk.LEFT, padx=1, pady=2)
-        ttk.Button(ai_group, text="优化全部", command=self._run_refine_all).pack(side=tk.LEFT, padx=1, pady=2)
-        ttk.Button(ai_group, text="填入原标题", command=self._fill_original_smart).pack(side=tk.LEFT, padx=1, pady=2)
-
-        # -- 编辑组 --
-        edit_group = ttk.LabelFrame(btn_bar, text="编辑")
-        edit_group.pack(side=tk.LEFT, padx=(0, 4))
-
-        ttk.Button(edit_group, text="编辑", width=4, command=self._edit_selected).pack(side=tk.LEFT, padx=1, pady=2)
-        ttk.Button(edit_group, text="删除", width=4, command=self._delete_selected).pack(side=tk.LEFT, padx=1, pady=2)
+        ttk.Button(btn_bar, text="优化选中", command=self._run_refine_selected).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_bar, text="编辑", width=4, command=self._edit_selected).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_bar, text="删除", width=4, command=self._delete_selected).pack(side=tk.LEFT, padx=2)
 
         # -- 过滤组 --
         filter_group = ttk.LabelFrame(btn_bar, text="过滤")
@@ -126,9 +115,15 @@ class StageRefineTab(ttk.Frame):
 
         # 右键菜单
         self.s1b_context_menu = tk.Menu(self, tearoff=0)
+        self.s1b_context_menu.add_command(label="全选", command=self._select_all)
+        self.s1b_context_menu.add_command(label="取消全选", command=self._deselect_all)
+        self.s1b_context_menu.add_separator()
         self.s1b_context_menu.add_command(label="编辑标题", command=self._edit_selected)
         self.s1b_context_menu.add_command(label="采用原标题", command=self._use_original)
         self.s1b_context_menu.add_command(label="重置为原标题（取消优化）", command=self._reset_to_original)
+        self.s1b_context_menu.add_separator()
+        self.s1b_context_menu.add_command(label="优化全部", command=self._run_refine_all)
+        self.s1b_context_menu.add_command(label="填入原标题(全部)", command=self._fill_original_all)
         self.s1b_context_menu.add_separator()
         self.s1b_ctx_vision_idx = self.s1b_context_menu.index("end") + 1
         self.s1b_context_menu.add_command(label="需要视觉识别: -", command=self._toggle_needs_vision)
@@ -138,9 +133,6 @@ class StageRefineTab(ttk.Frame):
         self.s1b_context_menu.add_command(label="批量→需要视觉", command=lambda: self._batch_needs_vision("TRUE"))
         self.s1b_context_menu.add_command(label="批量→不需要视觉", command=lambda: self._batch_needs_vision("FALSE"))
         self.s1b_context_menu.add_command(label="批量→反选", command=lambda: self._batch_needs_vision("INVERT"))
-        self.s1b_context_menu.add_separator()
-        self.s1b_context_menu.add_command(label="填入原标题(选中)", command=self._fill_original_selected)
-        self.s1b_context_menu.add_command(label="填入原标题(全部)", command=self._fill_original_all)
         self.s1b_context_menu.add_separator()
         self.s1b_context_menu.add_command(label="删除选中行", command=self._delete_selected)
 
@@ -158,10 +150,6 @@ class StageRefineTab(ttk.Frame):
 
         self.s1b_filter_label = ttk.Label(bottom_bar, text="过滤: 无", foreground="#888888")
         self.s1b_filter_label.pack(side=tk.LEFT, padx=4)
-
-        # 全选/取消全选（右侧）
-        ttk.Button(bottom_bar, text="全选", width=5, command=self._select_all).pack(side=tk.RIGHT, padx=2)
-        ttk.Button(bottom_bar, text="取消全选", width=6, command=self._deselect_all).pack(side=tk.RIGHT, padx=2)
 
     # ==================== 浏览 / 加载 ====================
 
@@ -441,7 +429,8 @@ class StageRefineTab(ttk.Frame):
         item = self.s1b_tree.identify_row(event.y)
         if not item:
             return
-        self.s1b_tree.selection_set(item)
+        if item not in self.s1b_tree.selection():
+            self.s1b_tree.selection_set(item)
         values = self.s1b_tree.item(item, "values")
 
         nv = values[1]

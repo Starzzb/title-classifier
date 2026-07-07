@@ -432,7 +432,8 @@ class APIConfigDialog(tk.Toplevel):
                 # 在主线程更新 UI
                 self.after(0, lambda: self._update_model_list(provider_id, model_combo, models, status_label))
             except Exception as e:
-                self.after(0, lambda: self._fetch_error(provider_id, str(e), status_label))
+                error_msg = str(e)
+                self.after(0, lambda: self._fetch_error(provider_id, error_msg, status_label))
 
         threading.Thread(target=fetch_thread, daemon=True).start()
 
