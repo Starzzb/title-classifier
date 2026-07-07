@@ -1,65 +1,73 @@
-"""场景检测模块 - 基于 ffmpeg 的场景切换检测"""
+"""场景检测模块 - 基于 OpenCV 的场景切换检测"""
 
-import subprocess
+import cv2
 import logging
+import numpy as np
 from typing import List, Tuple
 
 logger = logging.getLogger(__name__)
 
 
-def detect_scenes(video_path: str, threshold: float = 0.3) -> List[float]:
+def detect_scenes(video_path: str, threshold: float = 0.3, sample_interval: float = 0.5) -> List[float]:
     """
-    使用 ffmpeg scene detect 检测场景切换点。
+    使用 OpenCV 直方图差异检测场景切换点。
+
+    按 sample_interval 间隔采样帧，计算 HSV 直方图 Bhattacharyya 距离，
+    超过 threshold 时标记为场景切换。
 
     Args:
         video_path: 视频文件路径
-        threshold: 场景检测敏感度（0-1），越低越灵敏，默认 0.3
+        threshold: 场景检测敏感度（0-1），值越低越灵敏，默认 0.3
+        sample_interval: 采样间隔（秒），默认 0.5s
 
     Returns:
         场景切换时间点列表（秒），包含 0 和视频末尾
     """
-    cmd = [
-        "ffprobe",
-        "-v", "quiet",
-        "-show_entries", "frame=pts_time",
-        "-of", "csv=print_key=1",
-        "-f", "lavfi",
-        f"movie={video_path},select='gt(scene,{threshold})'",
-    ]
-
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-        if result.returncode != 0:
-            logger.warning(f"场景检测失败: {result.stderr[:200]}")
-            return [0.0]
-
-        scenes = []
-        for line in result.stdout.strip().split("\n"):
-            line = line.strip()
-            if not line:
-                continue
-            parts = line.split(",")
-            if len(parts) >= 2:
-                try:
-                    ts = float(parts[1])
-                    scenes.append(ts)
-                except ValueError:
-                    continue
-
-        scenes.sort()
-        logger.info(f"场景检测: 找到 {len(scenes)} 个场景切换点 (threshold={threshold})")
-
-        return scenes
-
-    except FileNotFoundError:
-        logger.warning("ffprobe 未安装，回退到整段处理")
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        logger.warning(f"无法打开视频: {video_path}，回退到整段处理")
         return [0.0]
-    except subprocess.TimeoutExpired:
-        logger.warning("场景检测超时（视频可能过大），回退到整段处理")
+
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    duration = total_frames / fps if fps > 0 else 0
+
+    if duration <= 0:
+        cap.release()
         return [0.0]
-    except Exception as e:
-        logger.warning(f"场景检测异常: {e}，回退到整段处理")
-        return [0.0]
+
+    step = max(1, int(fps * sample_interval))
+    prev_hist = None
+    timestamps = [0.0]
+    frame_idx = 0
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        if frame_idx % step != 0:
+            frame_idx += 1
+            continue
+
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        hist = cv2.calcHist([hsv], [0, 1], None, [50, 60], [0, 180, 0, 256])
+        cv2.normalize(hist, hist, 0, 1, cv2.NORM_MINMAX)
+
+        if prev_hist is not None:
+            diff = cv2.compareHist(prev_hist, hist, cv2.HISTCMP_BHATTACHARYYA)
+            if diff > threshold:
+                ts = frame_idx / fps
+                timestamps.append(ts)
+
+        prev_hist = hist
+        frame_idx += 1
+
+    cap.release()
+
+    timestamps.sort()
+    logger.info(f"场景检测: 找到 {len(timestamps)} 个场景切换点 (threshold={threshold})")
+    return timestamps
 
 
 def build_segments(scene_points: List[float], duration: float, max_scenes: int = 10) -> List[Tuple[float, float]]:

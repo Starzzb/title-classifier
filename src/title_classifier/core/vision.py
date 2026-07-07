@@ -255,7 +255,7 @@ class VisionProcessor:
         # 3. 帧选择
         t2 = time.perf_counter()
         selected_indices = self._select_representative_frames(
-            video_analysis["timeline"], clip_diff_scores=clip_diff_scores
+            video_analysis["timeline"], max_frames=self.vlm_frames, clip_diff_scores=clip_diff_scores
         )
         selected_frames = video_analysis["frames"]
         timing["frame_selection"] = time.perf_counter() - t2
