@@ -60,3 +60,24 @@ def image_to_base64(image_path: str, max_size: int = 640) -> str:
     except Exception as e:
         logger.error(f"图片转base64失败: {e}")
         return ""
+
+
+def get_image_info(image_path: str) -> dict:
+    """获取图片元数据（分辨率）
+
+    Returns:
+        {"resolution": str, "width": int, "height": int}
+    """
+    info = {"resolution": "", "width": 0, "height": 0}
+    try:
+        data = np.fromfile(image_path, dtype=np.uint8)
+        img = cv2.imdecode(data, cv2.IMREAD_COLOR)
+        if img is None:
+            return info
+        h, w = img.shape[:2]
+        info["width"] = w
+        info["height"] = h
+        info["resolution"] = f"{w}x{h}"
+    except Exception as e:
+        logger.warning(f"获取图片信息失败: {e}")
+    return info

@@ -3,8 +3,18 @@ name = "darkly"
 font_size = 10
 
 [providers]
-default = "gcli"
+default = "siliconflow"
 timeout = 90
+
+[providers.models]
+refine = "tencent/Hunyuan-MT-7B"
+vision = ""
+audio = "mimo-v2.5"
+
+[providers.stage_providers]
+refine = "siliconflow"
+vision = "gcli"
+audio = "mimo"
 
 [api]
 key = ""
@@ -19,3 +29,7 @@ backend = "openvino"
 debug_dir = "data/debug"
 max_image_size = 800
 vlm_retry_count = 1
+
+[refiner]
+batch_size = 10
+max_workers = 3

@@ -229,7 +229,7 @@ class Scanner:
             db.add_tags_from_keywords(media_id, keywords, "scanner")
 
     def sync_db(self, target_dir: str, exclude_dirs: list = None):
-        """扫描目录，将所有文件信息同步到数据库（不生成 CSV）
+        """扫描目录，将所有文件信息同步到数据库
 
         Args:
             target_dir: 目标目录
@@ -255,6 +255,7 @@ class Scanner:
         updated = 0
         inserted = 0
         skipped = 0
+        deleted = 0
 
         for file_path in files:
             name = file_path.stem
@@ -272,13 +273,32 @@ class Scanner:
             duration = None
             resolution = ""
             if file_path.suffix.lower() in VIDEO_EXTENSIONS:
-                try:
-                    from ..utils.video import get_video_info
-                    vinfo = get_video_info(str(file_path))
-                    duration = vinfo.get("duration") or None
-                    resolution = vinfo.get("resolution", "")
-                except Exception:
-                    pass
+                from ..utils.video import get_video_info
+                vinfo = get_video_info(str(file_path))
+                duration = vinfo.get("duration") or None
+                resolution = vinfo.get("resolution", "")
+
+                # ffprobe 和 cv2 都获取失败 → 损毁文件，删除
+                if not duration and not resolution:
+                    file_path.unlink(missing_ok=True)
+                    logger.warning(f"[已删除] 损毁视频: {file_path.name}")
+                    data = {
+                        "original_title": clean_title,
+                        "original_path": str(file_path),
+                        "current_path": str(file_path),
+                        "file_size": file_size,
+                        "needs_vision": False,
+                        "final_name": clean_name,
+                        "review_status": "文件损毁已删除",
+                    }
+                    self.db_store.insert_media(data)
+                    deleted += 1
+                    continue
+
+            elif file_path.suffix.lower() in IMAGE_EXTENSIONS:
+                from ..utils.image import get_image_info
+                iinfo = get_image_info(str(file_path))
+                resolution = iinfo.get("resolution", "")
 
             data = {
                 "original_title": clean_title,
@@ -299,14 +319,36 @@ class Scanner:
             )
 
             if existing:
-                # 匹配到旧记录：更新路径和元数据
                 changed = False
-                for field in ["original_path", "current_path", "file_size", "duration", "resolution"]:
+
+                # 如果之前标记为"文件已移走"，恢复状态
+                if existing.get("review_status") == "文件已移走":
+                    if existing.get("vision_description") or existing.get("vision_keywords"):
+                        new_status = "已完成"
+                    elif is_already_classified(existing.get("final_name", "")):
+                        new_status = "已规范化"
+                    else:
+                        new_status = data["review_status"]
+                    self.db_store.update_media(existing["id"], "review_status", new_status, "sync_db")
+                    logger.info(f"[恢复] 文件已移走 → {new_status}: {clean_title}")
+                    changed = True
+
+                # 更新路径
+                for field in ["original_path", "current_path"]:
                     new_val = data.get(field)
                     old_val = existing.get(field)
                     if new_val and new_val != old_val:
                         self.db_store.update_media(existing["id"], field, new_val, "sync_db")
                         changed = True
+
+                # 补全缺失元数据
+                for field in ["file_size", "duration", "resolution"]:
+                    new_val = data.get(field)
+                    old_val = existing.get(field)
+                    if new_val and not old_val:
+                        self.db_store.update_media(existing["id"], field, new_val, "sync_db")
+                        changed = True
+
                 if changed:
                     updated += 1
                 else:
@@ -315,23 +357,39 @@ class Scanner:
                 self.db_store.insert_media(data)
                 inserted += 1
 
-        logger.info(f"[完成] 数据库同步: 新增 {inserted}, 更新 {updated}, 无变化 {skipped}")
+        logger.info(f"[完成] 数据库同步: 新增 {inserted}, 更新 {updated}, 无变化 {skipped}, 删除损毁 {deleted}")
 
         # 查询该目录下缺少视觉描述的记录，生成待处理 CSV
         self._generate_vision_csv(target_path)
 
     def _generate_vision_csv(self, target_path: Path):
-        """查询 DB 中缺少视觉描述的记录，生成 CSV 供视觉识别使用"""
+        """查询 DB 中缺少视觉描述的记录，生成 CSV 供视觉识别使用
+
+        只包含：
+        1. 路径前缀匹配目标目录
+        2. 缺少视觉描述
+        3. review_status 不是 "文件已移走"
+        4. current_path 实际存在
+        """
         dir_prefix = str(target_path) + "%"
         rows = self.db_store.conn.execute(
             """SELECT * FROM media_files
                WHERE original_path LIKE ?
                AND (vision_description IS NULL OR vision_description = '')
-               AND (vision_keywords IS NULL OR vision_keywords = '')""",
+               AND (vision_keywords IS NULL OR vision_keywords = '')
+               AND review_status != '文件已移走'""",
             (dir_prefix,)
         ).fetchall()
 
-        if not rows:
+        # 过滤掉实际不存在的文件
+        valid_rows = []
+        for row in rows:
+            r = dict(row)
+            current_path = r.get("current_path", "")
+            if current_path and Path(current_path).exists():
+                valid_rows.append(r)
+
+        if not valid_rows:
             logger.info("[完成] 所有文件已完成视觉识别，无需生成 CSV")
             return
 
@@ -341,8 +399,7 @@ class Scanner:
         output_file = str(output_dir / "title_review.csv")
 
         csv_rows = []
-        for row in rows:
-            r = dict(row)
+        for r in valid_rows:
             csv_rows.append({
                 "original_title": r.get("original_title", ""),
                 "original_path": r.get("original_path", ""),
@@ -372,7 +429,7 @@ class Scanner:
             })
 
         self._save_csv(csv_rows, output_file, append=False)
-        logger.info(f"[待视觉识别] 发现 {len(rows)} 条记录缺少视觉描述，已生成 CSV: {output_file}")
+        logger.info(f"[待视觉识别] 发现 {len(csv_rows)} 条记录缺少视觉描述，已生成 CSV: {output_file}")
 
     def _scan_directory(self, directory: Path, exclude_dirs: List[str]) -> List[Path]:
         """递归扫描目录"""

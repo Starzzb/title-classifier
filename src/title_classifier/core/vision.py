@@ -402,7 +402,7 @@ class VisionProcessor:
             logger.info(f"[场景 {seg_idx+1}/{len(segments)}] {seg_start:.1f}s - {seg_end:.1f}s (时长: {seg_duration:.1f}s)")
 
             t1 = time.perf_counter()
-            seg_analysis = self._analyze_video_segment(video_path, seg_start, seg_end, seg_idx)
+            seg_analysis = self._analyze_video_segment(video_path, seg_start, seg_end, seg_idx, duration)
             timing[f"scene_{seg_idx}_yolo"] = time.perf_counter() - t1
 
             if not seg_analysis or "error" in seg_analysis:
@@ -458,7 +458,7 @@ class VisionProcessor:
             "timing": timing,
         }
 
-    def _analyze_video_segment(self, video_path: str, seg_start: float, seg_end: float, seg_idx: int) -> Dict:
+    def _analyze_video_segment(self, video_path: str, seg_start: float, seg_end: float, seg_idx: int, video_duration: float = None) -> Dict:
         """分析单个场景段：等距取帧 → YOLO 分析"""
         import cv2
         from pathlib import Path
@@ -477,7 +477,7 @@ class VisionProcessor:
 
         for i, ts in enumerate(timestamps):
             frame_path = str(tmp_dir / f"frame_{i:04d}_{ts:.1f}s.jpg")
-            if not extract_frame(video_path, frame_path, timestamp=str(ts), max_size=400, duration=seg_end):
+            if not extract_frame(video_path, frame_path, timestamp=str(ts), max_size=400, duration=video_duration):
                 continue
             frames.append(frame_path)
 
