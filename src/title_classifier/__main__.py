@@ -184,6 +184,10 @@ def cmd_vision(args):
         motion_threshold=args.motion_threshold,
         backend=args.backend,
         db_store=db,
+        use_scene_detection=not args.no_scene_detection,
+        scene_threshold=args.scene_threshold,
+        max_scenes=args.max_scenes,
+        frames_per_scene=args.frames_per_scene,
     )
 
     if not processor.initialize():
@@ -714,6 +718,10 @@ def main():
     vision_cmd.add_argument("--backend", default="openvino", choices=["auto", "openvino", "pytorch"], help="YOLO推理后端（auto=自动检测, openvino=Intel/AMD CPU加速, pytorch=原始PyTorch）")
     vision_cmd.add_argument("--no-motion-detection", action="store_true", help="禁用运动检测前置过滤（默认启用）")
     vision_cmd.add_argument("--motion-threshold", type=float, default=5.0, help="运动检测阈值（变化像素比例%%，低于此值跳过YOLO推理，默认5.0）")
+    vision_cmd.add_argument("--no-scene-detection", action="store_true", help="禁用场景分段分析（默认启用，仅60s以上视频生效）")
+    vision_cmd.add_argument("--scene-threshold", type=float, default=0.3, help="场景检测敏感度（0-1，越低切得越碎，默认0.3）")
+    vision_cmd.add_argument("--max-scenes", type=int, default=10, help="最大场景段数（默认10，超出则合并相邻小场景）")
+    vision_cmd.add_argument("--frames-per-scene", type=int, default=10, help="每场景取帧数（默认10）")
 
     vision_cmd.add_argument("--all", action="store_true", help="处理所有未识别的文件")
     vision_cmd.add_argument("--debug", action="store_true", help="启用调试模式，保存检测结果和VLM输入输出")

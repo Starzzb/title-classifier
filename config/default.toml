@@ -79,6 +79,12 @@ threshold = 0.25
 multi_label = true
 embedding_threshold = 0.75
 
+[scene_detection]
+enabled = true
+threshold = 0.3
+max_scenes = 10
+frames_per_scene = 10
+
 [providers]
 default = "gcli"
 timeout = 90

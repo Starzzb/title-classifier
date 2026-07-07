@@ -51,6 +51,10 @@ class VisionProcessor:
         motion_threshold: float = 5.0,
         motion_min_interval: float = 5.0,
         backend: str = "auto",
+        use_scene_detection: bool = True,
+        scene_threshold: float = 0.3,
+        max_scenes: int = 10,
+        frames_per_scene: int = 10,
     ):
         self.provider = provider
         self.use_yolo = use_yolo
@@ -71,6 +75,10 @@ class VisionProcessor:
         self.motion_threshold = motion_threshold
         self.motion_min_interval = motion_min_interval
         self.backend = backend
+        self.use_scene_detection = use_scene_detection
+        self.scene_threshold = scene_threshold
+        self.max_scenes = max_scenes
+        self.frames_per_scene = frames_per_scene
 
         self.provider_config = get_provider_config(provider)
         self.model = self.provider_config.get("default_model", "") if self.provider_config else ""
@@ -195,7 +203,11 @@ class VisionProcessor:
         if audio_context:
             logger.info(f"检测到音频上下文，长度: {len(audio_context)} 字符")
 
-        # 始终使用YOLO全面分析模式
+        # 场景检测模式：长视频按场景分段分析后合并
+        if self.use_scene_detection and duration >= 60:
+            return self._process_video_by_scenes(video_path, title, duration, audio_context, subtitle_segments)
+
+        # 默认使用YOLO全面分析模式
         return self._process_video_comprehensive(video_path, title, duration, audio_context, subtitle_segments)
 
     def _process_video_comprehensive(self, video_path: str, title: str, duration: float, audio_context: str = "", subtitle_segments: List[Dict] = None) -> Dict:
@@ -371,6 +383,209 @@ class VisionProcessor:
                 json.dump(timing, f, indent=2, ensure_ascii=False)
 
         return analysis_result
+
+    def _process_video_by_scenes(self, video_path: str, title: str, duration: float, audio_context: str = "", subtitle_segments: List[Dict] = None) -> Dict:
+        """场景分段分析模式：检测场景 → 逐段分析 → 合并结果"""
+        from .scene_detector import get_segments
+        from ..utils.prompt_loader import get_prompt
+
+        timing = {}
+        t_total_start = time.perf_counter()
+
+        segments = get_segments(video_path, duration, self.scene_threshold, self.max_scenes)
+        logger.info(f"场景分段数: {len(segments)}, 将逐段分析后合并")
+
+        scene_results = []
+
+        for seg_idx, (seg_start, seg_end) in enumerate(segments):
+            seg_duration = seg_end - seg_start
+            logger.info(f"[场景 {seg_idx+1}/{len(segments)}] {seg_start:.1f}s - {seg_end:.1f}s (时长: {seg_duration:.1f}s)")
+
+            t1 = time.perf_counter()
+            seg_analysis = self._analyze_video_segment(video_path, seg_start, seg_end, seg_idx)
+            timing[f"scene_{seg_idx}_yolo"] = time.perf_counter() - t1
+
+            if not seg_analysis or "error" in seg_analysis:
+                logger.warning(f"[场景 {seg_idx+1}] 分析失败，跳过")
+                continue
+
+            t2 = time.perf_counter()
+            seg_result = self._call_vlm_comprehensive(
+                seg_analysis["frames_for_vlm"],
+                f"{title}[场景{seg_idx+1}]",
+                seg_analysis["context"],
+                audio_context,
+            )
+            timing[f"scene_{seg_idx}_vlm"] = time.perf_counter() - t2
+
+            scene_desc = seg_result.get("description", "") or seg_result.get("error", "分析失败")
+            scene_kw = seg_result.get("keywords", "")
+            scene_results.append({
+                "index": seg_idx,
+                "start": seg_start,
+                "end": seg_end,
+                "duration": seg_duration,
+                "description": scene_desc,
+                "keywords": scene_kw,
+                "frames": len(seg_analysis["frames_for_vlm"]),
+            })
+            logger.info(f"  → 描述: {scene_desc[:60]}... 关键词: {scene_kw[:60]}...")
+
+        if not scene_results:
+            return {"error": "所有场景分析失败"}
+
+        merged = self._merge_scene_descriptions(scene_results, title)
+        timing["merge_vlm"] = merged.get("_timing", 0)
+        timing["total"] = time.perf_counter() - t_total_start
+
+        logger.info(
+            f"场景分析完成: {len(segments)}段, "
+            f"总耗时={timing['total']:.2f}s, "
+            f"合并VLM={timing.get('merge_vlm', 0):.2f}s"
+        )
+
+        return {
+            "description": merged.get("description", ""),
+            "keywords": merged.get("keywords", ""),
+            "video_summary": {
+                "has_person": True,
+                "duration": duration,
+                "scenes": len(segments),
+                "scene_results": scene_results,
+            },
+            "selected_frames": sum(s["frames"] for s in scene_results),
+            "total_analyzed": sum(s["frames"] for s in scene_results),
+            "timing": timing,
+        }
+
+    def _analyze_video_segment(self, video_path: str, seg_start: float, seg_end: float, seg_idx: int) -> Dict:
+        """分析单个场景段：等距取帧 → YOLO 分析"""
+        import cv2
+        from pathlib import Path
+
+        tmp_dir = Path("logs/_vision_tmp") / f"scene_{seg_idx}_{Path(video_path).stem}"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+
+        duration = seg_end - seg_start
+        n_frames = min(self.frames_per_scene, max(3, int(duration / 0.5)))
+        timestamps = np.linspace(seg_start, seg_end, n_frames)
+
+        frames = []
+        timeline = []
+        prev_frame_gray = None
+        prev_result = None
+
+        for i, ts in enumerate(timestamps):
+            frame_path = str(tmp_dir / f"frame_{i:04d}_{ts:.1f}s.jpg")
+            if not extract_frame(video_path, frame_path, timestamp=str(ts), max_size=400, duration=seg_end):
+                continue
+            frames.append(frame_path)
+
+            data = np.fromfile(frame_path, dtype=np.uint8)
+            frame = cv2.imdecode(data, cv2.IMREAD_COLOR)
+            if frame is None:
+                continue
+
+            should_skip = False
+            if self.motion_detection and prev_frame_gray is not None:
+                has_motion, _ = self._detect_motion(prev_frame_gray, frame)
+                if not has_motion:
+                    should_skip = True
+
+            if should_skip and prev_result is not None:
+                entry = prev_result.copy()
+                entry["timestamp"] = ts
+                entry["frame_path"] = frame_path
+                entry["index"] = i
+                entry["motion_skipped"] = True
+                timeline.append(entry)
+                prev_frame_gray = frame if len(frame.shape) == 2 else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                continue
+
+            if self.yolo_detector:
+                if self.device == "cuda":
+                    with _gpu_lock:
+                        result = self.yolo_detector.analyze_comprehensive(frame)
+                else:
+                    result = self.yolo_detector.analyze_comprehensive(frame)
+
+                entry = {
+                    "index": i,
+                    "timestamp": ts,
+                    "frame_path": frame_path,
+                    "has_person": result.get("has_person", False),
+                    "confidence": result.get("confidence", 0),
+                    "motion_skipped": False,
+                }
+                timeline.append(entry)
+                prev_result = entry
+
+            prev_frame_gray = frame if len(frame.shape) == 2 else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+        selected_indices = self._select_representative_frames(timeline, max_frames=self.frames_per_scene)
+        selected_frames = [frames[i] for i in selected_indices if i < len(frames)]
+        summary = self._generate_video_summary(timeline, duration)
+
+        has_person_text = f"包含人物: {'是' if summary.get('has_person', False) else '否'}"
+        context = (
+            f"【场景 {seg_idx+1} 分析】\n"
+            f"时间范围: {seg_start:.1f}s - {seg_end:.1f}s\n"
+            f"总帧数: {len(timeline)}, 选中VLM帧: {len(selected_frames)}\n"
+            f"{has_person_text}\n"
+            f"主要姿态: {summary.get('main_pose', '未知')}"
+        )
+
+        return {
+            "frames_for_vlm": selected_frames,
+            "context": context,
+            "frames": frames,
+            "timeline": timeline,
+        }
+
+    def _merge_scene_descriptions(self, scene_results: List[Dict], title: str) -> Dict:
+        """合并所有场景描述为一组最终结果"""
+        from ..providers import call_text_api
+        from ..utils.prompt_loader import get_prompt
+
+        t_start = time.perf_counter()
+
+        scenes_text = ""
+        for s in scene_results:
+            scenes_text += (
+                f"[场景 {s['index'] + 1}] ({s['start']:.1f}s - {s['end']:.1f}s)\n"
+                f"描述: {s.get('description', '')}\n"
+                f"关键词: {s.get('keywords', '')}\n\n"
+            )
+
+        system_header = get_prompt("vision_scene_merge", "system_header")
+        task_instruction = get_prompt("vision_scene_merge", "task_instruction")
+        output_format = get_prompt("vision_scene_merge", "output_format")
+
+        prompt = (
+            f"{system_header}\n\n"
+            f"{task_instruction}\n\n"
+            f"视频标题: {title}\n\n"
+            f"{scenes_text}\n"
+            f"{output_format}"
+        )
+
+        result = call_text_api(self.provider, prompt, model=self.model, api_key=self.api_key)
+
+        timing = time.perf_counter() - t_start
+
+        if not result or result.startswith("[ERROR]"):
+            logger.error(f"场景合并VLM失败: {result[:100] if result else '空响应'}")
+            descs = "；".join(s.get("description", "") for s in scene_results)
+            kws = "，".join(s.get("keywords", "") for s in scene_results)
+            return {
+                "description": descs[:500],
+                "keywords": kws[:500],
+                "_timing": timing,
+            }
+
+        parsed = self._parse_vision_response(result)
+        parsed["_timing"] = timing
+        return parsed
 
     def _process_video_traditional(self, video_path: str, title: str, duration: float, audio_context: str = "") -> Dict:
         """传统处理模式"""

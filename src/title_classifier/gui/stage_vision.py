@@ -193,6 +193,18 @@ class StageVisionTab(ttk.Frame):
         self.s1c_debug_var = tk.BooleanVar()
         ttk.Checkbutton(row3, text="启用调试", variable=self.s1c_debug_var).pack(side=tk.LEFT, padx=12)
 
+        # 场景检测
+        row4 = ttk.Frame(parent)
+        row4.pack(fill=tk.X, padx=4, pady=2)
+        self.s1c_scene_detection_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(row4, text="场景分段分析（长视频自动分段）", variable=self.s1c_scene_detection_var).pack(side=tk.LEFT, padx=4)
+        ttk.Label(row4, text="最大段数:").pack(side=tk.LEFT, padx=(8, 2))
+        self.s1c_max_scenes_var = tk.StringVar(value="10")
+        ttk.Entry(row4, textvariable=self.s1c_max_scenes_var, width=4).pack(side=tk.LEFT, padx=2)
+        ttk.Label(row4, text="每段帧数:").pack(side=tk.LEFT, padx=(4, 2))
+        self.s1c_frames_per_scene_var = tk.StringVar(value="10")
+        ttk.Entry(row4, textvariable=self.s1c_frames_per_scene_var, width=4).pack(side=tk.LEFT, padx=2)
+
     def _build_mux_section(self, parent):
         """字幕封装折叠区"""
         ttk.Label(parent, text="需要先运行音频识别产出字幕文件", foreground="blue", font=("Microsoft YaHei", 8)).pack(fill=tk.X, padx=4, pady=2)
@@ -306,6 +318,17 @@ class StageVisionTab(ttk.Frame):
                 return
             cmd.extend(["--yolo-conf", yolo_conf])
 
+        # 场景检测
+        if not self.s1c_scene_detection_var.get():
+            cmd.append("--no-scene-detection")
+        else:
+            max_scenes = self.s1c_max_scenes_var.get()
+            if max_scenes and max_scenes != "10":
+                cmd.extend(["--max-scenes", max_scenes])
+            frames_per = self.s1c_frames_per_scene_var.get()
+            if frames_per and frames_per != "10":
+                cmd.extend(["--frames-per-scene", frames_per])
+
         if self.s1c_all_var.get():
             cmd.append("--all")
 
@@ -368,6 +391,17 @@ class StageVisionTab(ttk.Frame):
             threshold = self.s1c_motion_threshold_var.get()
             if threshold and threshold != "5.0":
                 cmd.extend(["--motion-threshold", threshold])
+
+        # 场景检测
+        if not self.s1c_scene_detection_var.get():
+            cmd.append("--no-scene-detection")
+        else:
+            max_scenes = self.s1c_max_scenes_var.get()
+            if max_scenes and max_scenes != "10":
+                cmd.extend(["--max-scenes", max_scenes])
+            frames_per = self.s1c_frames_per_scene_var.get()
+            if frames_per and frames_per != "10":
+                cmd.extend(["--frames-per-scene", frames_per])
 
         # 添加分析参数
         analysis_step = self.s1c_analysis_step_var.get()
