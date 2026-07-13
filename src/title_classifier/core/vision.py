@@ -32,53 +32,59 @@ class VisionProcessor:
 
     def __init__(
         self,
-        provider: str = "gcli",
-        use_yolo: bool = False,
-        yolo_model: str = "pose",
+        config: dict = None,
+        provider: str = None,
+        use_yolo: bool = None,
+        yolo_model: str = None,
         yolo_models: List[str] = None,
-        yolo_conf: float = 0.4,
-        use_clip: bool = False,
-        clip_threshold: float = 0.25,
-        max_image_size: int = 640,
-        vlm_frames: int = 10,
-        analysis_step: float = 2.0,
-        max_sample_frames: int = 50,
+        yolo_conf: float = None,
+        use_clip: bool = None,
+        clip_threshold: float = None,
+        max_image_size: int = None,
+        vlm_frames: int = None,
+        analysis_step: float = None,
+        max_sample_frames: int = None,
         debug_dir: str = None,
         covers_dir: str = None,
         db_store=None,
-        device: str = "cpu",
-        motion_detection: bool = True,
-        motion_threshold: float = 5.0,
-        motion_min_interval: float = 5.0,
-        backend: str = "auto",
-        use_scene_detection: bool = True,
-        scene_threshold: float = 0.3,
-        max_scenes: int = 10,
-        frames_per_scene: int = 10,
+        device: str = None,
+        motion_detection: bool = None,
+        motion_threshold: float = None,
+        motion_min_interval: float = None,
+        backend: str = None,
+        use_scene_detection: bool = None,
+        scene_threshold: float = None,
+        max_scenes: int = None,
+        frames_per_scene: int = None,
     ):
-        self.provider = provider
-        self.use_yolo = use_yolo
-        self.yolo_model = yolo_model
-        self.yolo_models = yolo_models or ["pose"]
-        self.yolo_conf = yolo_conf
-        self.use_clip = use_clip
-        self.clip_threshold = clip_threshold
-        self.max_image_size = max_image_size
-        self.vlm_frames = vlm_frames
-        self.analysis_step = analysis_step
-        self.max_sample_frames = max_sample_frames
+        from ..utils.config import get_config_value
+        if config is None:
+            config = {}
+        cv = lambda key, fallback: get_config_value(config, key, fallback)
+
+        self.provider = provider or cv("providers.stage_providers.vision", "gcli")
+        self.use_yolo = use_yolo if use_yolo is not None else cv("yolo.comprehensive.enabled", False)
+        self.yolo_model = yolo_model or cv("yolo.model_type", "pose")
+        self.yolo_models = yolo_models or cv("yolo.comprehensive.models", ["pose"])
+        self.yolo_conf = yolo_conf if yolo_conf is not None else cv("yolo.confidence", 0.5)
+        self.use_clip = use_clip if use_clip is not None else False
+        self.clip_threshold = clip_threshold if clip_threshold is not None else cv("clip.threshold", 0.25)
+        self.max_image_size = max_image_size if max_image_size is not None else cv("vision.max_image_size", 640)
+        self.vlm_frames = vlm_frames if vlm_frames is not None else cv("vision.vlm_frames", 10)
+        self.analysis_step = analysis_step if analysis_step is not None else cv("vision.analysis_step", 5.0)
+        self.max_sample_frames = max_sample_frames if max_sample_frames is not None else cv("vision.max_sample_frames", 50)
         self.debug_dir = debug_dir
         self.covers_dir = covers_dir
         self.db_store = db_store
-        self.device = self._resolve_device(device)
-        self.motion_detection = motion_detection
-        self.motion_threshold = motion_threshold
-        self.motion_min_interval = motion_min_interval
-        self.backend = backend
-        self.use_scene_detection = use_scene_detection
-        self.scene_threshold = scene_threshold
-        self.max_scenes = max_scenes
-        self.frames_per_scene = frames_per_scene
+        self.device = self._resolve_device(device or cv("general.device", "cpu"))
+        self.motion_detection = motion_detection if motion_detection is not None else cv("vision.motion_detection", True)
+        self.motion_threshold = motion_threshold if motion_threshold is not None else cv("vision.motion_threshold", 8.0)
+        self.motion_min_interval = motion_min_interval if motion_min_interval is not None else cv("vision.motion_min_interval", 5.0)
+        self.backend = backend or cv("yolo.backend", "auto")
+        self.use_scene_detection = use_scene_detection if use_scene_detection is not None else cv("scene_detection.enabled", True)
+        self.scene_threshold = scene_threshold if scene_threshold is not None else cv("scene_detection.threshold", 0.3)
+        self.max_scenes = max_scenes if max_scenes is not None else cv("scene_detection.max_scenes", 10)
+        self.frames_per_scene = frames_per_scene if frames_per_scene is not None else cv("scene_detection.frames_per_scene", 10)
 
         self.provider_config = get_provider_config(provider)
         self.model = self.provider_config.get("default_model", "") if self.provider_config else ""
@@ -204,7 +210,7 @@ class VisionProcessor:
             logger.info(f"检测到音频上下文，长度: {len(audio_context)} 字符")
 
         # 场景检测模式：长视频按场景分段分析后合并
-        if self.use_scene_detection and duration >= 60:
+        if self.use_scene_detection and duration >= 120:
             return self._process_video_by_scenes(video_path, title, duration, audio_context, subtitle_segments)
 
         # 默认使用YOLO全面分析模式

@@ -165,8 +165,13 @@ def cmd_vision(args):
     db = MediaDB()
     db.init_schema()
 
+    # 加载配置
+    from .utils.config import load_merged_config
+    cfg = load_merged_config()
+
     # 初始化处理器
     processor = VisionProcessor(
+        config=cfg,
         provider=args.provider,
         use_yolo=args.use_yolo,
         yolo_model="pose" if args.use_yolo else "detect",
@@ -702,27 +707,30 @@ def main():
 
     # vision 命令
     vision_cmd = subparsers.add_parser("vision", help="视觉识别")
+    from .utils.config import load_merged_config, get_config_value
+    cfg = load_merged_config()
+    gv = lambda key, fallback: get_config_value(cfg, key, fallback)
+
     vision_cmd.add_argument("-c", "--csv", default="data/output/title_review.csv", help="CSV文件路径")
-    vision_cmd.add_argument("-p", "--provider", default="gcli", help="AI Provider")
+    vision_cmd.add_argument("-p", "--provider", default=gv("providers.stage_providers.vision", "gcli"), help="AI Provider")
     vision_cmd.add_argument("--use-yolo", action="store_true", help="使用YOLO姿态检测（分析人体姿态，智能选择代表性帧）")
     vision_cmd.add_argument("--comprehensive", action="store_true", help="全面分析模式（使用detect/pose/segment三个模型，投票决策）")
-    vision_cmd.add_argument("--yolo-conf", type=float, default=0.5, help="YOLO置信度阈值")
+    vision_cmd.add_argument("--yolo-conf", type=float, default=gv("yolo.confidence", 0.5), help="YOLO置信度阈值")
     vision_cmd.add_argument("--use-clip", action="store_true", help="使用CLIP预分类")
-    vision_cmd.add_argument("--clip-threshold", type=float, default=0.25, help="CLIP置信度阈值")
-    vision_cmd.add_argument("--max-image-size", type=int, default=640, help="图片最大尺寸")
-    vision_cmd.add_argument("--vlm-frames", type=int, default=10, help="VLM帧数（由采样间隔决定）")
-    vision_cmd.add_argument("--analysis-step", type=float, default=2.0, help="YOLO模式采样间隔（秒，默认2秒）")
-    vision_cmd.add_argument("--max-sample-frames", type=int, default=50, help="最大采样帧数上限（默认50，超过此数会均匀分布到整个视频）")
-    vision_cmd.add_argument("--device", default="cpu", choices=["auto", "cuda", "cpu"], help="推理设备（cpu=默认, auto=自动检测, cuda=GPU需手动安装CUDA版PyTorch）")
+    vision_cmd.add_argument("--clip-threshold", type=float, default=gv("clip.threshold", 0.25), help="CLIP置信度阈值")
+    vision_cmd.add_argument("--max-image-size", type=int, default=gv("vision.max_image_size", 640), help="图片最大尺寸")
+    vision_cmd.add_argument("--vlm-frames", type=int, default=gv("vision.vlm_frames", 10), help="VLM帧数（由采样间隔决定）")
+    vision_cmd.add_argument("--analysis-step", type=float, default=gv("vision.analysis_step", 5.0), help="YOLO模式采样间隔（秒，默认5秒）")
+    vision_cmd.add_argument("--max-sample-frames", type=int, default=gv("vision.max_sample_frames", 50), help="最大采样帧数上限（默认50，超过此数会均匀分布到整个视频）")
+    vision_cmd.add_argument("--device", default=gv("general.device", "cpu"), choices=["auto", "cuda", "cpu"], help="推理设备（cpu=默认, auto=自动检测, cuda=GPU需手动安装CUDA版PyTorch）")
     vision_cmd.add_argument("--concurrent", type=int, default=4, help="并发处理视频数（默认4，CPU多核并行）")
-    vision_cmd.add_argument("--backend", default="openvino", choices=["auto", "openvino", "pytorch"], help="YOLO推理后端（auto=自动检测, openvino=Intel/AMD CPU加速, pytorch=原始PyTorch）")
+    vision_cmd.add_argument("--backend", default=gv("yolo.backend", "auto"), choices=["auto", "openvino", "pytorch"], help="YOLO推理后端（auto=自动检测, openvino=Intel/AMD CPU加速, pytorch=原始PyTorch）")
     vision_cmd.add_argument("--no-motion-detection", action="store_true", help="禁用运动检测前置过滤（默认启用）")
-    vision_cmd.add_argument("--motion-threshold", type=float, default=5.0, help="运动检测阈值（变化像素比例%%，低于此值跳过YOLO推理，默认5.0）")
+    vision_cmd.add_argument("--motion-threshold", type=float, default=gv("vision.motion_threshold", 8.0), help="运动检测阈值（变化像素比例%%，低于此值跳过YOLO推理，默认8.0）")
     vision_cmd.add_argument("--no-scene-detection", action="store_true", help="禁用场景分段分析（默认启用，仅60s以上视频生效）")
-    vision_cmd.add_argument("--scene-threshold", type=float, default=0.3, help="场景检测敏感度（0-1，越低切得越碎，默认0.3）")
-    vision_cmd.add_argument("--max-scenes", type=int, default=10, help="最大场景段数（默认10，超出则合并相邻小场景）")
-    vision_cmd.add_argument("--frames-per-scene", type=int, default=10, help="每场景取帧数（默认10）")
-
+    vision_cmd.add_argument("--scene-threshold", type=float, default=gv("scene_detection.threshold", 0.3), help="场景检测敏感度（0-1，越低切得越碎，默认0.3）")
+    vision_cmd.add_argument("--max-scenes", type=int, default=gv("scene_detection.max_scenes", 10), help="最大场景段数（默认10，超出则合并相邻小场景）")
+    vision_cmd.add_argument("--frames-per-scene", type=int, default=gv("scene_detection.frames_per_scene", 10), help="每场景取帧数（默认10）")
     vision_cmd.add_argument("--all", action="store_true", help="处理所有未识别的文件")
     vision_cmd.add_argument("--debug", action="store_true", help="启用调试模式，保存检测结果和VLM输入输出")
     vision_cmd.add_argument("--debug-dir", default="data/debug", help="调试数据输出目录")

@@ -61,6 +61,9 @@ class StageVisionTab(ttk.Frame):
 
     def __init__(self, master, ctx: AppContext, run_command=None, gui_sync_to_db=None, sync_csv_to_db=None, **kwargs):
         super().__init__(master, **kwargs)
+        from ..utils.config import load_merged_config, get_config_value
+        self._cfg = load_merged_config()
+        self._gv = lambda key, fallback: get_config_value(self._cfg, key, fallback)
         self.ctx = ctx
         self._run_command = run_command
         self._gui_sync_to_db = gui_sync_to_db
@@ -136,10 +139,10 @@ class StageVisionTab(ttk.Frame):
         row1 = ttk.Frame(parent)
         row1.pack(fill=tk.X, padx=4, pady=2)
         ttk.Label(row1, text="推理设备:").pack(side=tk.LEFT, padx=(0, 4))
-        self.s1c_device_var = tk.StringVar(value="cpu")
+        self.s1c_device_var = tk.StringVar(value=self._gv("general.device", "cpu"))
         ttk.Combobox(row1, textvariable=self.s1c_device_var, values=["cpu", "auto", "cuda"], state="readonly", width=8).pack(side=tk.LEFT, padx=(0, 12))
         ttk.Label(row1, text="YOLO后端:").pack(side=tk.LEFT, padx=(0, 4))
-        self.s1c_backend_var = tk.StringVar(value="auto")
+        self.s1c_backend_var = tk.StringVar(value=self._gv("yolo.backend", "auto"))
         ttk.Combobox(row1, textvariable=self.s1c_backend_var, values=["auto", "openvino", "pytorch"], state="readonly", width=10).pack(side=tk.LEFT)
 
         # 状态
@@ -160,30 +163,32 @@ class StageVisionTab(ttk.Frame):
         # 运动检测
         row4 = ttk.Frame(parent)
         row4.pack(fill=tk.X, padx=4, pady=2)
-        self.s1c_motion_var = tk.BooleanVar(value=True)
+        self.s1c_motion_var = tk.BooleanVar(value=self._gv("vision.motion_detection", True))
         ttk.Checkbutton(row4, text="运动检测", variable=self.s1c_motion_var).pack(side=tk.LEFT)
         ttk.Label(row4, text="阈值(%):").pack(side=tk.LEFT, padx=(12, 4))
-        self.s1c_motion_threshold_var = tk.StringVar(value="5.0")
-        ttk.Entry(row4, textvariable=self.s1c_motion_threshold_var, width=6).pack(side=tk.LEFT)
+        self.s1c_motion_threshold_var = tk.StringVar(value=str(self._gv("vision.motion_threshold", 8.0)))
+        mt_entry = ttk.Entry(row4, textvariable=self.s1c_motion_threshold_var, width=6)
+        mt_entry.pack(side=tk.LEFT)
+        ToolTip(mt_entry, "跳过YOLO推理的像素变化最小阈值（%）。\n两帧之间变化低于此值视为静态画面，跳过YOLO直接复用上一帧结果。\n值越低越敏感（5=轻微光影变化也会触发），值越高越宽松（8=画面明显变化才触发）。")
 
     def _build_params_section(self, parent):
         """分析参数折叠区"""
         row1 = ttk.Frame(parent)
         row1.pack(fill=tk.X, padx=4, pady=2)
         ttk.Label(row1, text="采样间隔(秒):").pack(side=tk.LEFT, padx=4)
-        self.s1c_analysis_step_var = tk.StringVar(value="2.0")
+        self.s1c_analysis_step_var = tk.StringVar(value=str(self._gv("vision.analysis_step", 5.0)))
         ttk.Entry(row1, textvariable=self.s1c_analysis_step_var, width=6).pack(side=tk.LEFT, padx=4)
         ttk.Label(row1, text="最大采样帧数:").pack(side=tk.LEFT, padx=8)
-        self.s1c_max_sample_var = tk.StringVar(value="50")
+        self.s1c_max_sample_var = tk.StringVar(value=str(self._gv("vision.max_sample_frames", 50)))
         ttk.Entry(row1, textvariable=self.s1c_max_sample_var, width=6).pack(side=tk.LEFT, padx=4)
         ttk.Label(row1, text="VLM帧数:").pack(side=tk.LEFT, padx=8)
-        self.s1c_vlm_frames_var = tk.StringVar(value="10")
+        self.s1c_vlm_frames_var = tk.StringVar(value=str(self._gv("vision.vlm_frames", 10)))
         ttk.Entry(row1, textvariable=self.s1c_vlm_frames_var, width=6).pack(side=tk.LEFT, padx=4)
 
         row2 = ttk.Frame(parent)
         row2.pack(fill=tk.X, padx=4, pady=2)
         ttk.Label(row2, text="YOLO置信度:").pack(side=tk.LEFT, padx=4)
-        self.s1c_yolo_conf_var = tk.StringVar(value="0.5")
+        self.s1c_yolo_conf_var = tk.StringVar(value=str(self._gv("yolo.confidence", 0.5)))
         ttk.Entry(row2, textvariable=self.s1c_yolo_conf_var, width=6).pack(side=tk.LEFT, padx=4)
 
         row3 = ttk.Frame(parent)
@@ -196,14 +201,16 @@ class StageVisionTab(ttk.Frame):
         # 场景检测
         row4 = ttk.Frame(parent)
         row4.pack(fill=tk.X, padx=4, pady=2)
-        self.s1c_scene_detection_var = tk.BooleanVar(value=True)
+        self.s1c_scene_detection_var = tk.BooleanVar(value=self._gv("scene_detection.enabled", True))
         ttk.Checkbutton(row4, text="场景分段分析（长视频自动分段）", variable=self.s1c_scene_detection_var).pack(side=tk.LEFT, padx=4)
         ttk.Label(row4, text="最大段数:").pack(side=tk.LEFT, padx=(8, 2))
-        self.s1c_max_scenes_var = tk.StringVar(value="10")
+        self.s1c_max_scenes_var = tk.StringVar(value=str(self._gv("scene_detection.max_scenes", 10)))
         ttk.Entry(row4, textvariable=self.s1c_max_scenes_var, width=4).pack(side=tk.LEFT, padx=2)
-        ttk.Label(row4, text="每段帧数:").pack(side=tk.LEFT, padx=(4, 2))
-        self.s1c_frames_per_scene_var = tk.StringVar(value="10")
-        ttk.Entry(row4, textvariable=self.s1c_frames_per_scene_var, width=4).pack(side=tk.LEFT, padx=2)
+        ttk.Label(row4, text="每段发送帧数:").pack(side=tk.LEFT, padx=(4, 2))
+        self.s1c_frames_per_scene_var = tk.StringVar(value=str(self._gv("scene_detection.frames_per_scene", 10)))
+        fps_entry = ttk.Entry(row4, textvariable=self.s1c_frames_per_scene_var, width=4)
+        fps_entry.pack(side=tk.LEFT, padx=2)
+        ToolTip(fps_entry, "每个场景段发送给VLM分析的帧数，默认10帧。\n实际推理帧数按 min(每段帧数, 时长/0.5) 动态计算，可能多于发送帧数。")
 
     def _build_mux_section(self, parent):
         """字幕封装折叠区"""
@@ -252,6 +259,7 @@ class StageVisionTab(ttk.Frame):
         csv = self.ctx.csv_var.get()
         from ..utils.config import load_merged_config, get_config_value
         cfg = load_merged_config()
+        gv = lambda key, fallback: get_config_value(cfg, key, fallback)
         provider = get_config_value(cfg, "providers.stage_providers.vision", "gcli")
         device = self.s1c_device_var.get()
         backend = self.s1c_backend_var.get()
@@ -289,7 +297,7 @@ class StageVisionTab(ttk.Frame):
             cmd.append("--no-motion-detection")
         else:
             threshold = self.s1c_motion_threshold_var.get()
-            if threshold and threshold != "5.0":
+            if threshold and threshold != str(gv("vision.motion_threshold", 8.0)):
                 cmd.extend(["--motion-threshold", threshold])
 
         # 添加分析参数
@@ -298,7 +306,7 @@ class StageVisionTab(ttk.Frame):
             cmd.extend(["--analysis-step", analysis_step])
 
         max_sample = self.s1c_max_sample_var.get()
-        if max_sample and max_sample != "50":
+        if max_sample and max_sample != str(gv("vision.max_sample_frames", 50)):
             cmd.extend(["--max-sample-frames", max_sample])
 
         vlm_frames = self.s1c_vlm_frames_var.get()
@@ -307,7 +315,7 @@ class StageVisionTab(ttk.Frame):
 
         # YOLO置信度（校验范围）
         yolo_conf = self.s1c_yolo_conf_var.get()
-        if yolo_conf and yolo_conf != "0.5":
+        if yolo_conf and yolo_conf != str(gv("yolo.confidence", 0.5)):
             try:
                 conf_val = float(yolo_conf)
                 if not (0.1 <= conf_val <= 0.9):
@@ -323,10 +331,10 @@ class StageVisionTab(ttk.Frame):
             cmd.append("--no-scene-detection")
         else:
             max_scenes = self.s1c_max_scenes_var.get()
-            if max_scenes and max_scenes != "10":
+            if max_scenes and max_scenes != str(gv("scene_detection.max_scenes", 10)):
                 cmd.extend(["--max-scenes", max_scenes])
             frames_per = self.s1c_frames_per_scene_var.get()
-            if frames_per and frames_per != "10":
+            if frames_per and frames_per != str(gv("scene_detection.frames_per_scene", 10)):
                 cmd.extend(["--frames-per-scene", frames_per])
 
         if self.s1c_all_var.get():
@@ -353,6 +361,7 @@ class StageVisionTab(ttk.Frame):
         csv = self.ctx.csv_var.get()
         from ..utils.config import load_merged_config, get_config_value
         cfg = load_merged_config()
+        gv = lambda key, fallback: get_config_value(cfg, key, fallback)
         provider = get_config_value(cfg, "providers.stage_providers.vision", "gcli")
         device = self.s1c_device_var.get()
         backend = self.s1c_backend_var.get()
@@ -389,7 +398,7 @@ class StageVisionTab(ttk.Frame):
             cmd.append("--no-motion-detection")
         else:
             threshold = self.s1c_motion_threshold_var.get()
-            if threshold and threshold != "5.0":
+            if threshold and threshold != str(gv("vision.motion_threshold", 8.0)):
                 cmd.extend(["--motion-threshold", threshold])
 
         # 场景检测
@@ -397,10 +406,10 @@ class StageVisionTab(ttk.Frame):
             cmd.append("--no-scene-detection")
         else:
             max_scenes = self.s1c_max_scenes_var.get()
-            if max_scenes and max_scenes != "10":
+            if max_scenes and max_scenes != str(gv("scene_detection.max_scenes", 10)):
                 cmd.extend(["--max-scenes", max_scenes])
             frames_per = self.s1c_frames_per_scene_var.get()
-            if frames_per and frames_per != "10":
+            if frames_per and frames_per != str(gv("scene_detection.frames_per_scene", 10)):
                 cmd.extend(["--frames-per-scene", frames_per])
 
         # 添加分析参数
@@ -409,7 +418,7 @@ class StageVisionTab(ttk.Frame):
             cmd.extend(["--analysis-step", analysis_step])
 
         max_sample = self.s1c_max_sample_var.get()
-        if max_sample and max_sample != "50":
+        if max_sample and max_sample != str(gv("vision.max_sample_frames", 50)):
             cmd.extend(["--max-sample-frames", max_sample])
 
         vlm_frames = self.s1c_vlm_frames_var.get()
@@ -418,7 +427,7 @@ class StageVisionTab(ttk.Frame):
 
         # YOLO置信度（校验范围）
         yolo_conf = self.s1c_yolo_conf_var.get()
-        if yolo_conf and yolo_conf != "0.5":
+        if yolo_conf and yolo_conf != str(gv("yolo.confidence", 0.5)):
             try:
                 conf_val = float(yolo_conf)
                 if not (0.1 <= conf_val <= 0.9):
