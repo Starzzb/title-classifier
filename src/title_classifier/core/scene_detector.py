@@ -40,6 +40,7 @@ def detect_scenes(video_path: str, threshold: float = 0.3, sample_interval: floa
     prev_hist = None
     timestamps = [0.0]
     frame_idx = 0
+    last_log_pct = 0
 
     while True:
         ret, frame = cap.read()
@@ -49,6 +50,12 @@ def detect_scenes(video_path: str, threshold: float = 0.3, sample_interval: floa
         if frame_idx % step != 0:
             frame_idx += 1
             continue
+
+        # 进度日志：每处理 10% 的视频量打印一次
+        pct = int(frame_idx * 100 / total_frames) if total_frames > 0 else 0
+        if pct >= last_log_pct + 10:
+            last_log_pct = pct
+            logger.info(f"场景检测进度: {frame_idx/fps:.0f}s / {duration:.0f}s ({pct}%)")
 
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         hist = cv2.calcHist([hsv], [0, 1], None, [50, 60], [0, 180, 0, 256])

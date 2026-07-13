@@ -398,6 +398,16 @@ class VisionProcessor:
         timing = {}
         t_total_start = time.perf_counter()
 
+        # 创建调试目录
+        debug_subdir = None
+        if self.debug_dir:
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            video_name = re.sub(r'[<>:"/\\|?*]', '_', Path(video_path).stem)[:30].rstrip(' .')
+            debug_subdir = Path(self.debug_dir) / f"{timestamp}_{video_name}"
+            debug_subdir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"场景模式调试目录: {debug_subdir}")
+
         segments = get_segments(video_path, duration, self.scene_threshold, self.max_scenes)
         logger.info(f"场景分段数: {len(segments)}, 将逐段分析后合并")
 
@@ -415,6 +425,13 @@ class VisionProcessor:
                 logger.warning(f"[场景 {seg_idx+1}] 分析失败，跳过")
                 continue
 
+            # 保存每段的YOLO检测结果到调试目录
+            if debug_subdir:
+                seg_debug_dir = debug_subdir / f"scene_{seg_idx}"
+                seg_debug_dir.mkdir(exist_ok=True)
+                (seg_debug_dir / "detection").mkdir(exist_ok=True)
+                self._save_detection_debug(seg_analysis, seg_debug_dir)
+
             t2 = time.perf_counter()
             seg_result = self._call_vlm_comprehensive(
                 seg_analysis["frames_for_vlm"],
@@ -423,6 +440,24 @@ class VisionProcessor:
                 audio_context,
             )
             timing[f"scene_{seg_idx}_vlm"] = time.perf_counter() - t2
+
+            # 保存每段的VLM调试数据
+            if debug_subdir:
+                seg_debug_dir = debug_subdir / f"scene_{seg_idx}"
+                (seg_debug_dir / "vlm_frames").mkdir(exist_ok=True)
+                prompt = self._build_comprehensive_prompt(
+                    f"{title}[场景{seg_idx+1}]",
+                    len(seg_analysis["frames_for_vlm"]),
+                    seg_analysis["context"],
+                    audio_context,
+                )
+                self._save_vlm_debug(seg_analysis["frames_for_vlm"], prompt, seg_debug_dir)
+                # 保存该段VLM响应
+                response_text = (
+                    f"描述: {seg_result.get('description', '')}\n"
+                    f"关键词: {seg_result.get('keywords', '')}\n"
+                )
+                (seg_debug_dir / "vlm_response.txt").write_text(response_text, encoding="utf-8")
 
             scene_desc = seg_result.get("description", "") or seg_result.get("error", "分析失败")
             scene_kw = seg_result.get("keywords", "")
@@ -444,13 +479,27 @@ class VisionProcessor:
         timing["merge_vlm"] = merged.get("_timing", 0)
         timing["total"] = time.perf_counter() - t_total_start
 
+        # 保存合并结果到调试目录
+        if debug_subdir:
+            video_summary = {
+                "has_person": True,
+                "duration": duration,
+                "scenes": len(segments),
+                "scene_results": scene_results,
+            }
+            self._save_debug_summary(merged, video_summary, debug_subdir)
+            # 保存时间统计
+            (debug_subdir / "timing.json").write_text(
+                json.dumps(timing, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+
         logger.info(
             f"场景分析完成: {len(segments)}段, "
             f"总耗时={timing['total']:.2f}s, "
             f"合并VLM={timing.get('merge_vlm', 0):.2f}s"
         )
 
-        return {
+        result = {
             "description": merged.get("description", ""),
             "keywords": merged.get("keywords", ""),
             "video_summary": {
@@ -463,6 +512,9 @@ class VisionProcessor:
             "total_analyzed": sum(s["frames"] for s in scene_results),
             "timing": timing,
         }
+        if debug_subdir:
+            result["debug_dir"] = str(debug_subdir)
+        return result
 
     def _analyze_video_segment(self, video_path: str, seg_start: float, seg_end: float, seg_idx: int, video_duration: float = None) -> Dict:
         """分析单个场景段：等距取帧 → YOLO 分析"""
