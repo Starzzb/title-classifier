@@ -131,8 +131,17 @@ def cmd_refine(args):
 def cmd_vision(args):
     """视觉识别命令"""
     import time
+    import traceback
 
-    _, _, VisionProcessor, _, resolve_media_path = _import_core()
+    from .utils.crash_reporter import write_crash_dump
+
+    try:
+        _, _, VisionProcessor, _, resolve_media_path = _import_core()
+    except Exception:
+        crash_file = write_crash_dump(*sys.exc_info())
+        print(f"[致命错误] 导入失败，崩溃报告: {crash_file}", file=sys.stderr)
+        traceback.print_exc()
+        return
 
     csv_path = Path(args.csv)
     if not csv_path.exists():
@@ -791,7 +800,18 @@ def main():
         return
 
     setup_logging(args.verbose, args.log)
-    args.func(args)
+
+    # 安装崩溃报告钩子（确保日志系统就绪后安装）
+    from .utils.crash_reporter import install_excepthook as _install_crash_hook, write_crash_dump as _write_dump
+    _install_crash_hook()
+
+    try:
+        args.func(args)
+    except Exception:
+        import traceback as _tb
+        crash_file = _write_dump(*sys.exc_info())
+        print(f"[致命错误] 命令执行失败，崩溃报告: {crash_file}", file=sys.stderr)
+        _tb.print_exc()
 
 
 if __name__ == "__main__":

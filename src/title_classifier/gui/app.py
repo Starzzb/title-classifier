@@ -20,6 +20,7 @@ from ..providers import (
 from ..core.refiner import Refiner
 from ..utils.muxer import SubtitleMuxer
 from ..utils.file_resolve import resolve_media_path
+from ..utils.crash_reporter import install_excepthook, write_crash_dump
 from .context import AppContext
 
 PROJECT_DIR = Path(__file__).parent.parent.parent.parent.resolve()
@@ -106,6 +107,10 @@ class TitleClassifierApp(ttk.Window):
         self.geometry("900x850")
         self.minsize(800, 700)
 
+        # 全局异常处理（尽早安装，确保捕获所有启动期异常）
+        install_excepthook()
+        self._setup_exception_hook()
+
         # 设置窗口图标
         try:
             icon_path = Path(__file__).parent / "assets" / "icon.ico"
@@ -133,7 +138,30 @@ class TitleClassifierApp(ttk.Window):
             user_config_path=PROJECT_DIR / "config" / "user.toml",
         )
 
+        # 确保输出目录存在（CSV浏览、扫描输出均依赖此目录）
+        (PROJECT_DIR / "data" / "output").mkdir(parents=True, exist_ok=True)
+
         self._build_ui()
+
+    def _setup_exception_hook(self):
+        """设置全局异常钩子，防止未捕获异常导致静默闪退"""
+        import tkinter.messagebox as mb
+
+        def handle_exception(exc, val, tb):
+            logger = logging.getLogger(__name__)
+            logger.critical("未捕获异常", exc_info=(exc, val, tb))
+            crash_file = write_crash_dump(exc, val, tb)
+            try:
+                mb.showerror(
+                    "错误",
+                    f"程序遇到未预期的错误:\n{exc.__name__}: {val}\n\n"
+                    f"崩溃报告已保存: {crash_file}\n"
+                    f"请查看日志了解详情。"
+                )
+            except Exception:
+                pass
+
+        self.report_callback_exception = handle_exception
 
     def _load_env(self):
         """加载.env文件"""
