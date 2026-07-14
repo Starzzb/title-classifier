@@ -122,13 +122,20 @@ class DebugWindow(ttk.Toplevel):
         self.vlm_photo_images = []
         self.thumb_photo_images = []
 
+        self.is_scene_mode = False
+        self.scenes: Dict[int, dict] = {}
+        self.current_scene = 0
+        self.scene_selector = None
+
         self._load_data()
         self._build_ui()
         self._display_first()
 
-    def _load_data(self):
-        """加载调试数据"""
-        detection_dir = self.debug_dir / "detection"
+    def _load_scene_data(self, scene_dir: Path) -> dict:
+        """加载单个场景的调试数据"""
+        data = {"frame_data": [], "vlm_frames": [], "vlm_prompt": "", "vlm_response": ""}
+
+        detection_dir = scene_dir / "detection"
         if detection_dir.exists():
             json_files = sorted(detection_dir.glob("*_result.json"))
             for jf in json_files:
@@ -136,27 +143,85 @@ class DebugWindow(ttk.Toplevel):
                 original = detection_dir / f"{stem}_original.jpg"
                 annotated = detection_dir / f"{stem}_annotated.jpg"
                 with open(jf, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                self.frame_data.append({
+                    frame_result = json.load(f)
+                data["frame_data"].append({
                     "stem": stem,
                     "original": str(original) if original.exists() else None,
                     "annotated": str(annotated) if annotated.exists() else None,
-                    "result": data,
+                    "result": frame_result,
                 })
 
-        vlm_dir = self.debug_dir / "vlm_frames"
+        vlm_dir = scene_dir / "vlm_frames"
         if vlm_dir.exists():
-            self.vlm_frames = sorted([str(f) for f in vlm_dir.glob("*.jpg")])
+            data["vlm_frames"] = sorted([str(f) for f in vlm_dir.glob("*.jpg")])
 
-        self.vlm_prompt = ""
-        self.vlm_response = ""
-        prompt_file = self.debug_dir / "vlm_prompt.txt"
-        response_file = self.debug_dir / "vlm_response.txt"
+        prompt_file = scene_dir / "vlm_prompt.txt"
+        response_file = scene_dir / "vlm_response.txt"
         if prompt_file.exists():
-            self.vlm_prompt = prompt_file.read_text(encoding="utf-8")
+            data["vlm_prompt"] = prompt_file.read_text(encoding="utf-8")
         if response_file.exists():
-            self.vlm_response = response_file.read_text(encoding="utf-8")
+            data["vlm_response"] = response_file.read_text(encoding="utf-8")
 
+        return data
+
+    def _apply_scene(self, scene_idx: int):
+        """将指定场景的数据应用到当前显示变量"""
+        scene = self.scenes.get(scene_idx)
+        if not scene:
+            return
+        self.current_scene = scene_idx
+        self.frame_data = scene["frame_data"]
+        self.vlm_frames = scene["vlm_frames"]
+        self.vlm_prompt = scene["vlm_prompt"]
+        self.vlm_response = scene["vlm_response"]
+
+    def _load_data(self):
+        """加载调试数据"""
+        # 检测是否场景模式
+        first_scene = self.debug_dir / "scene_0" / "detection"
+        if first_scene.exists():
+            self.is_scene_mode = True
+            scene_dirs = sorted(
+                [d for d in self.debug_dir.iterdir() if d.is_dir() and d.name.startswith("scene_")],
+                key=lambda p: int(p.name.split("_")[1]) if p.name.split("_")[1].isdigit() else 0,
+            )
+            for sd in scene_dirs:
+                scene_idx = int(sd.name.split("_")[1]) if sd.name.split("_")[1].isdigit() else 0
+                self.scenes[scene_idx] = self._load_scene_data(sd)
+            if self.scenes:
+                self._apply_scene(0)
+        else:
+            # 平面模式（原有逻辑）
+            detection_dir = self.debug_dir / "detection"
+            if detection_dir.exists():
+                json_files = sorted(detection_dir.glob("*_result.json"))
+                for jf in json_files:
+                    stem = jf.stem.replace("_result", "")
+                    original = detection_dir / f"{stem}_original.jpg"
+                    annotated = detection_dir / f"{stem}_annotated.jpg"
+                    with open(jf, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    self.frame_data.append({
+                        "stem": stem,
+                        "original": str(original) if original.exists() else None,
+                        "annotated": str(annotated) if annotated.exists() else None,
+                        "result": data,
+                    })
+
+            vlm_dir = self.debug_dir / "vlm_frames"
+            if vlm_dir.exists():
+                self.vlm_frames = sorted([str(f) for f in vlm_dir.glob("*.jpg")])
+
+            self.vlm_prompt = ""
+            self.vlm_response = ""
+            prompt_file = self.debug_dir / "vlm_prompt.txt"
+            response_file = self.debug_dir / "vlm_response.txt"
+            if prompt_file.exists():
+                self.vlm_prompt = prompt_file.read_text(encoding="utf-8")
+            if response_file.exists():
+                self.vlm_response = response_file.read_text(encoding="utf-8")
+
+        # 共同部分：汇总
         self.summary = {}
         summary_file = self.debug_dir / "summary.json"
         if summary_file.exists():
@@ -170,6 +235,20 @@ class DebugWindow(ttk.Toplevel):
         # 主容器
         main_frame = ttk.Frame(self)
         main_frame.pack(fill=BOTH, expand=True, padx=5, pady=(5, 0))
+
+        # 场景选择器（场景模式专用）
+        if self.is_scene_mode:
+            scene_top = ttk.Frame(main_frame)
+            scene_top.pack(fill=X, pady=(0, 4))
+            ttk.Label(scene_top, text="场景选择:", font=("Microsoft YaHei", 9, "bold")).pack(side=LEFT, padx=(0, 4))
+            scene_keys = sorted(self.scenes.keys())
+            scene_names = [f"场景 {k+1}" for k in scene_keys]
+            self.scene_var = tk.StringVar(value=scene_names[0] if scene_names else "")
+            self.scene_selector = ttk.Combobox(
+                scene_top, textvariable=self.scene_var, values=scene_names, state="readonly", width=12
+            )
+            self.scene_selector.pack(side=LEFT, padx=4)
+            self.scene_selector.bind("<<ComboboxSelected>>", lambda e: self._switch_scene())
 
         # 三栏 PanedWindow
         pane = ttk.Panedwindow(main_frame, orient=HORIZONTAL)
@@ -443,6 +522,64 @@ class DebugWindow(ttk.Toplevel):
         except Exception as e:
             self.canvas.delete("all")
             self.canvas.create_text(10, 10, anchor=NW, text=f"图片加载失败: {e}", fill="red")
+
+    def _switch_scene(self):
+        """切换当前显示的场景"""
+        if not self.scene_selector:
+            return
+        selection = self.scene_var.get()
+        scene_keys = sorted(self.scenes.keys())
+        for idx, name in [(k, f"场景 {k+1}") for k in scene_keys]:
+            if name == selection:
+                self._apply_scene(idx)
+                break
+
+        # 更新场景描述信息
+        scene_info = self.scenes[self.current_scene]
+        scene_result = self.summary.get("video_summary", {}).get("scene_results", [])
+        for sr in scene_result:
+            if sr.get("index") == self.current_scene:
+                desc = sr.get("description", "")
+                kw = sr.get("keywords", "")
+                self.img_title.configure(text=f"场景 {self.current_scene+1}: {desc[:60]}...")
+                break
+
+        self._rebuild_display()
+
+    def _rebuild_display(self):
+        """重建显示（切换场景后刷新所有面板）"""
+        # 清除旧内容
+        for widget in self.thumb_inner.winfo_children():
+            widget.destroy()
+        for tab in [self.overview_text, self.detect_text, self.pose_text,
+                     self.segment_text, self.vote_text]:
+            tab.configure(state=NORMAL)
+            tab.delete("1.0", END)
+        self.canvas.delete("all")
+        self.vlm_photo_images.clear()
+
+        # 刷新
+        self._build_thumbnails()
+        if self.frame_data:
+            self.current_frame_idx = 0
+            self._display_frame(0)
+        else:
+            self.overview_text.insert(END, "无检测帧数据")
+
+        # 刷新右栏 VLM 面板
+        for widget in self.vlm_frame_tab.winfo_children():
+            widget.destroy()
+        self._build_vlm_frames_tab()
+        if self.vlm_prompt:
+            self.prompt_text.configure(state=NORMAL)
+            self.prompt_text.delete("1.0", END)
+            self.prompt_text.insert(END, self.vlm_prompt)
+            self.prompt_text.configure(state=DISABLED)
+        if self.vlm_response:
+            self.response_text.configure(state=NORMAL)
+            self.response_text.delete("1.0", END)
+            self.response_text.insert(END, self.vlm_response)
+            self.response_text.configure(state=DISABLED)
 
     def _build_thumbnails(self):
         """构建/重建左栏缩略图网格"""
