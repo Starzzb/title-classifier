@@ -519,7 +519,6 @@ class VisionProcessor:
     def _analyze_video_segment(self, video_path: str, seg_start: float, seg_end: float, seg_idx: int, video_duration: float = None) -> Dict:
         """分析单个场景段：等距取帧 → YOLO 分析"""
         import cv2
-        from pathlib import Path
 
         tmp_dir = Path("logs/_vision_tmp") / f"scene_{seg_idx}_{Path(video_path).stem}"
         tmp_dir.mkdir(parents=True, exist_ok=True)
@@ -1746,8 +1745,6 @@ class VisionProcessor:
         Returns:
             SRT文件路径
         """
-        from pathlib import Path
-
         srt_dir = Path(output_dir)
         srt_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1958,9 +1955,35 @@ class VisionProcessor:
         # 同步识别结果到数据库
         if self.db_store:
             media_record = self.db_store.find_by_path(str(video_path))
-            if media_record:
-                duration = video_summary.get("duration") if video_summary else None
-                self._sync_to_db(media_record["id"], final_result, video_path, duration)
+            if not media_record:
+                media_record = self.db_store.find_by_current_path(str(video_path))
+            if not media_record:
+                # 尝试按文件名模糊匹配
+                fname = Path(video_path).name
+                media_record = self.db_store.find_match(original_title=fname)
+            if not media_record:
+                # DB 中无记录，创建新记录
+                logger.info(f"DB 中无记录，创建新记录: {video_path}")
+                import os
+                fsize = None
+                try:
+                    fsize = os.path.getsize(video_path)
+                except Exception:
+                    pass
+                new_data = {
+                    "original_title": Path(video_path).name,
+                    "original_path": str(video_path),
+                    "current_path": str(video_path),
+                    "file_size": fsize,
+                    "needs_vision": False,
+                    "final_name": title or Path(video_path).stem,
+                    "review_status": "已完成",
+                }
+                new_id = self.db_store.insert_media(new_data)
+                media_record = {"id": new_id}
+            
+            duration = video_summary.get("duration") if video_summary else None
+            self._sync_to_db(media_record["id"], final_result, video_path, duration)
 
         return final_result
 
