@@ -18,12 +18,9 @@ VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".flv", ".wmv", ".webm", ".m
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".gif", ".tiff"}
 MEDIA_EXTENSIONS = VIDEO_EXTENSIONS | IMAGE_EXTENSIONS
 
-THUMBNAIL_DIRS = {".thumbs", "thumbs", "@eaDir", "thumbnails", ".thumbnails", "Thumbnails"}
-
-
 def _is_thumbnail(file_path: Path) -> bool:
-    """判断文件是否位于缩略图目录中"""
-    return any(part in THUMBNAIL_DIRS for part in file_path.parts)
+    """判断文件是否位于以 . 开头的隐藏目录中（如 .thumbs、.thumbnails 等）"""
+    return any(part.startswith(".") for part in file_path.parent.parts if part not in ("/", "\\", ""))
 
 
 def has_chinese(text: str) -> bool:
