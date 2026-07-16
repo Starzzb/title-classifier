@@ -67,7 +67,7 @@ class StageScanTab(ttk.Frame):
         self.s1_sync_db_var = tk.BooleanVar()
         sync_db_cb = ttk.Checkbutton(opt_frame, text="同步数据库", variable=self.s1_sync_db_var, command=self._on_option_changed)
         sync_db_cb.pack(side=tk.LEFT, padx=4)
-        ToolTip(sync_db_cb, "仅将文件信息同步到数据库（不生成CSV）")
+        ToolTip(sync_db_cb, "扫描文件并同步到数据库，同时生成待视觉识别的CSV")
 
         # 执行按钮
         btn_frame = ttk.Frame(tab)

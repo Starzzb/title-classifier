@@ -105,7 +105,7 @@ def cmd_scan(args):
     scanner = Scanner(output_dir=args.output_dir, db_store=db)
 
     if args.sync_db:
-        # DB 同步模式：扫描全部文件，只写 DB，不生成 CSV
+        # DB 同步模式：扫描全部文件，同步到数据库，并生成待处理 CSV
         scanner.sync_db(target_dir=args.dir, exclude_dirs=args.exclude_dir)
     else:
         # 普通扫描 / 强制重分类：生成 CSV
@@ -717,7 +717,7 @@ def main():
     scan_cmd.add_argument("-a", "--append", action="store_true", help="追加模式")
     scan_cmd.add_argument("--exclude-dir", nargs="*", default=[], help="排除的目录")
     scan_cmd.add_argument("--force", action="store_true", help="强制重新分类")
-    scan_cmd.add_argument("--sync-db", action="store_true", help="仅同步数据库（不生成CSV）")
+    scan_cmd.add_argument("--sync-db", action="store_true", help="同步数据库并生成待视觉识别CSV")
     scan_cmd.set_defaults(func=cmd_scan)
 
     # refine 命令
