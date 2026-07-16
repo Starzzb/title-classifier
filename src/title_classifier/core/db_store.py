@@ -168,13 +168,18 @@ class MediaDB:
         if candidates:
             if file_size:
                 # 有大小信息，做 ±1% 区间验证
+                has_sized_candidate = False
                 for c in candidates:
                     db_size = c["file_size"]
                     if db_size and db_size > 0:
+                        has_sized_candidate = True
                         diff_ratio = abs(db_size - file_size) / db_size
                         if diff_ratio <= 0.01:
                             return dict(c)
-                # 所有候选都不在 ±1% 范围内，跳过
+                # 所有有大小的候选都不在 ±1% 范围内，跳过
+                # 但如果所有候选都无大小信息，以标题匹配作为兜底
+                if not has_sized_candidate:
+                    return dict(candidates[0])
             else:
                 # 无大小信息，标题匹配即命中
                 return dict(candidates[0])
