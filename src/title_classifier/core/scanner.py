@@ -18,6 +18,13 @@ VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".flv", ".wmv", ".webm", ".m
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".gif", ".tiff"}
 MEDIA_EXTENSIONS = VIDEO_EXTENSIONS | IMAGE_EXTENSIONS
 
+THUMBNAIL_DIRS = {".thumbs", "thumbs", "@eaDir", "thumbnails", ".thumbnails", "Thumbnails"}
+
+
+def _is_thumbnail(file_path: Path) -> bool:
+    """判断文件是否位于缩略图目录中"""
+    return any(part in THUMBNAIL_DIRS for part in file_path.parts)
+
 
 def has_chinese(text: str) -> bool:
     """检查是否包含中文"""
@@ -147,6 +154,9 @@ class Scanner:
         # 判断是单个文件还是目录
         if target_path.is_file():
             logger.info(f"处理单个文件: {target_path}")
+            if _is_thumbnail(target_path):
+                logger.info(f"跳过缩略图: {target_path}")
+                return ""
             files = [target_path] if target_path.suffix.lower() in MEDIA_EXTENSIONS else []
             if not files:
                 logger.warning(f"不支持的文件类型: {target_path}")
@@ -443,6 +453,8 @@ class Scanner:
                 continue
 
             if item.is_file() and item.suffix.lower() in MEDIA_EXTENSIONS:
+                if _is_thumbnail(item):
+                    continue
                 files.append(item)
 
         return sorted(files)
