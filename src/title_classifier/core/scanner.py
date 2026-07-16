@@ -323,6 +323,7 @@ class Scanner:
                 original_title=clean_title,
                 file_size=file_size,
                 duration=duration,
+                resolution=resolution,
             )
 
             if existing:

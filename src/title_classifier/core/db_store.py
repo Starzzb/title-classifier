@@ -62,6 +62,7 @@ class MediaDB:
             original_title=data.get("original_title", ""),
             file_size=data.get("file_size"),
             duration=data.get("duration"),
+            resolution=data.get("resolution"),
         )
         if existing:
             # 匹配到已有记录，更新路径
@@ -138,17 +139,19 @@ class MediaDB:
         ).fetchone()
         return dict(row) if row else None
 
-    def find_match(self, original_title: str, file_size: int = None, duration: float = None) -> Optional[dict]:
+    def find_match(self, original_title: str, file_size: int = None, duration: float = None,
+                   resolution: str = None) -> Optional[dict]:
         """
-        按原始文件名匹配视频（抛弃路径匹配）
+        按原始文件名匹配视频（严格匹配：标题 + 大小 + 分辨率 + 时长全部一致才命中）
 
-        Level 1: original_title 精确匹配 + file_size ±1% 区间验证
-        Level 2: file_size ±1% + duration ±1s 区间匹配（仅 Level 1 未命中时）
+        Level 1: original_title 精确匹配 + file_size 精确匹配（误差 ≤0.1%）+ resolution 精确匹配 + duration 精确匹配（误差 ≤0.5s）
+        Level 2: file_size 精确匹配（误差 ≤0.1%）+ duration 精确匹配（误差 ≤0.5s）（仅 Level 1 未命中时）
 
         Args:
             original_title: 原始文件名（如 "TG@COSSSDZH (1).mp4"）
             file_size: 文件大小（字节），可选
             duration: 视频时长（秒），可选
+            resolution: 分辨率（如 "1920x1080"），可选
 
         Returns:
             匹配到的记录，或 None
@@ -166,35 +169,50 @@ class MediaDB:
         ).fetchall()
 
         if candidates:
-            if file_size:
-                # 有大小信息，做 ±1% 区间验证
-                has_sized_candidate = False
-                for c in candidates:
+            for c in candidates:
+                # 严格验证 file_size
+                if file_size:
                     db_size = c["file_size"]
                     if db_size and db_size > 0:
-                        has_sized_candidate = True
                         diff_ratio = abs(db_size - file_size) / db_size
-                        if diff_ratio <= 0.01:
-                            return dict(c)
-                # 所有有大小的候选都不在 ±1% 范围内，跳过
-                # 但如果所有候选都无大小信息，以标题匹配作为兜底
-                if not has_sized_candidate:
-                    return dict(candidates[0])
-            else:
-                # 无大小信息，标题匹配即命中
-                return dict(candidates[0])
+                        if diff_ratio > 0.001:
+                            continue
+                    elif db_size is None:
+                        continue
+                # 严格验证 duration
+                if duration:
+                    db_dur = c["duration"]
+                    if db_dur and db_dur > 0:
+                        if abs(db_dur - duration) > 0.5:
+                            continue
+                    elif db_dur is None:
+                        continue
+                # 严格验证 resolution
+                if resolution:
+                    db_res = c["resolution"]
+                    if db_res and db_res != resolution:
+                        continue
+                    elif db_res is None:
+                        continue
+                return dict(c)
+            # 所有候选都未通过严格验证
+            return None
 
-        # Level 2: file_size + duration 区间匹配
+        # Level 2: file_size + duration 严格匹配（不含标题）
         if file_size and duration:
-            size_min = int(file_size * 0.99)
-            size_max = int(file_size * 1.01)
-            dur_min = duration - 1.0
-            dur_max = duration + 1.0
+            size_min = int(file_size * 0.999)
+            size_max = int(file_size * 1.001)
+            dur_min = duration - 0.5
+            dur_max = duration + 0.5
 
-            row = self.conn.execute(
-                "SELECT * FROM media_files WHERE file_size BETWEEN ? AND ? AND duration BETWEEN ? AND ?",
-                (size_min, size_max, dur_min, dur_max)
-            ).fetchone()
+            query = "SELECT * FROM media_files WHERE file_size BETWEEN ? AND ? AND duration BETWEEN ? AND ?"
+            params = [size_min, size_max, dur_min, dur_max]
+
+            if resolution:
+                query += " AND resolution = ?"
+                params.append(resolution)
+
+            row = self.conn.execute(query, params).fetchone()
 
             if row:
                 return dict(row)
