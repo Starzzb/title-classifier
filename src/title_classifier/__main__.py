@@ -385,6 +385,18 @@ def cmd_vision(args):
     print(f"  失败: {counter['failed']}")
     print(f"  结果已保存至: {csv_path}")
 
+    # 自动导入数据库
+    if getattr(args, "auto_import", False):
+        print(f"\n[自动导入] 正在将 CSV 数据导入数据库...")
+        from .core.db_store import MediaDB
+        _db = MediaDB()
+        _db.init_schema()
+        stats = _db.import_csv(csv_path)
+        print(f"  导入: {stats['imported']}, 更新: {stats['updated']}, 标签: {stats['tags_added']}")
+    else:
+        print(f"\n[提示] 建议运行以下命令将 CSV 数据导入数据库:")
+        print(f"  python -m title-classifier db import")
+
 
 def cmd_rename(args):
     """重命名命令"""
@@ -744,6 +756,7 @@ def main():
     vision_cmd.add_argument("--debug", action="store_true", help="启用调试模式，保存检测结果和VLM输入输出")
     vision_cmd.add_argument("--debug-dir", default="data/debug", help="调试数据输出目录")
     vision_cmd.add_argument("--retry-failed", action="store_true", help="重试之前失败的行（vision_failed=true）")
+    vision_cmd.add_argument("--auto-import", action="store_true", help="处理完成后自动将 CSV 数据导入数据库")
     vision_cmd.set_defaults(func=cmd_vision)
 
     # audio 命令
