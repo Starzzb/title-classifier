@@ -367,6 +367,26 @@ class Scanner:
 
         logger.info(f"[完成] 数据库同步: 新增 {inserted}, 更新 {updated}, 无变化 {skipped}, 删除损毁 {deleted}")
 
+        # 标记磁盘上已不存在的记录为"文件已移走"
+        moved = 0
+        target_str = str(target_path)
+        db_rows = self.db_store.conn.execute(
+            "SELECT id, current_path, original_path, review_status FROM media_files WHERE current_path LIKE ? OR original_path LIKE ?",
+            (f"{target_str}%", f"{target_str}%")
+        ).fetchall()
+        for row in db_rows:
+            if row["review_status"] == "文件已移走":
+                continue
+            cur = row["current_path"]
+            orig = row["original_path"]
+            cur_missing = cur and not Path(cur).exists()
+            orig_missing = orig and not Path(orig).exists()
+            if (cur_missing and orig_missing) or (cur_missing and not orig):
+                self.db_store.update_media(row["id"], "review_status", "文件已移走", "sync_db")
+                moved += 1
+        if moved:
+            logger.info(f"[同步] 标记 {moved} 个文件已移走")
+
         # 查询该目录下缺少视觉描述的记录，生成待处理 CSV
         self._generate_vision_csv(target_path)
 
