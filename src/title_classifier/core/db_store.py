@@ -198,7 +198,7 @@ class MediaDB:
             # 所有候选都未通过严格验证
             return None
 
-        # Level 2: file_size + duration 严格匹配（不含标题）
+        # Level 2: file_size + duration + resolution 严格匹配 + 完整标题一致
         if file_size and duration:
             size_min = int(file_size * 0.999)
             size_max = int(file_size * 1.001)
@@ -212,10 +212,15 @@ class MediaDB:
                 query += " AND resolution = ?"
                 params.append(resolution)
 
-            row = self.conn.execute(query, params).fetchone()
+            rows = self.conn.execute(query, params).fetchall()
 
-            if row:
-                return dict(row)
+            if rows:
+                # 完整 original_title 必须一致
+                for row in rows:
+                    if row["original_title"] == original_title:
+                        return dict(row)
+                # 标题不匹配则不算重复
+                return None
 
         return None
 
