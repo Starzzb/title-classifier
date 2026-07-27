@@ -142,19 +142,8 @@ class MediaDB:
     def find_match(self, original_title: str, file_size: int = None, duration: float = None,
                    resolution: str = None) -> Optional[dict]:
         """
-        按原始文件名匹配视频（严格匹配：标题 + 大小 + 分辨率 + 时长全部一致才命中）
-
-        Level 1: original_title 精确匹配 + file_size 精确匹配（误差 ≤0.1%）+ resolution 精确匹配 + duration 精确匹配（误差 ≤0.5s）
-        Level 2: file_size 精确匹配（误差 ≤0.1%）+ duration 精确匹配（误差 ≤0.5s）（仅 Level 1 未命中时）
-
-        Args:
-            original_title: 原始文件名（如 "TG@COSSSDZH (1).mp4"）
-            file_size: 文件大小（字节），可选
-            duration: 视频时长（秒），可选
-            resolution: 分辨率（如 "1920x1080"），可选
-
-        Returns:
-            匹配到的记录，或 None
+        严格匹配：original_title + file_size + resolution + duration 全部一致才认为是重复文件。
+        任一字段缺失或不符合则不算重复，允许入库。
         """
         if not original_title:
             return None
@@ -163,64 +152,32 @@ class MediaDB:
         if not original_title:
             return None
 
-        # Level 1: 标题精确匹配
         candidates = self.conn.execute(
             "SELECT * FROM media_files WHERE original_title=?", (original_title,)
         ).fetchall()
 
-        if candidates:
-            for c in candidates:
-                # 严格验证 file_size
-                if file_size:
-                    db_size = c["file_size"]
-                    if db_size and db_size > 0:
-                        diff_ratio = abs(db_size - file_size) / db_size
-                        if diff_ratio > 0.001:
-                            continue
-                    elif db_size is None:
+        for c in candidates:
+            if file_size:
+                db_size = c["file_size"]
+                if db_size and db_size > 0:
+                    if abs(db_size - file_size) / db_size > 0.001:
                         continue
-                # 严格验证 duration
-                if duration:
-                    db_dur = c["duration"]
-                    if db_dur and db_dur > 0:
-                        if abs(db_dur - duration) > 0.5:
-                            continue
-                    elif db_dur is None:
+                elif db_size is None:
+                    continue
+            if duration:
+                db_dur = c["duration"]
+                if db_dur and db_dur > 0:
+                    if abs(db_dur - duration) > 0.5:
                         continue
-                # 严格验证 resolution
-                if resolution:
-                    db_res = c["resolution"]
-                    if db_res and db_res != resolution:
-                        continue
-                    elif db_res is None:
-                        continue
-                return dict(c)
-            # 所有候选都未通过严格验证
-            return None
-
-        # Level 2: file_size + duration + resolution 严格匹配 + 完整标题一致
-        if file_size and duration:
-            size_min = int(file_size * 0.999)
-            size_max = int(file_size * 1.001)
-            dur_min = duration - 0.5
-            dur_max = duration + 0.5
-
-            query = "SELECT * FROM media_files WHERE file_size BETWEEN ? AND ? AND duration BETWEEN ? AND ?"
-            params = [size_min, size_max, dur_min, dur_max]
-
+                elif db_dur is None:
+                    continue
             if resolution:
-                query += " AND resolution = ?"
-                params.append(resolution)
-
-            rows = self.conn.execute(query, params).fetchall()
-
-            if rows:
-                # 完整 original_title 必须一致
-                for row in rows:
-                    if row["original_title"] == original_title:
-                        return dict(row)
-                # 标题不匹配则不算重复
-                return None
+                db_res = c["resolution"]
+                if db_res and db_res != resolution:
+                    continue
+                elif db_res is None:
+                    continue
+            return dict(c)
 
         return None
 
