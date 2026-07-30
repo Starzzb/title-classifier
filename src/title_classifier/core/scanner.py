@@ -398,7 +398,27 @@ class Scanner:
         2. 缺少视觉描述
         3. review_status 不是 "文件已移走"
         4. current_path 实际存在
+
+        生成时会合并已有 CSV 中的视觉数据，避免覆盖之前的处理结果。
         """
+        output_dir = self.output_dir / target_path.name
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_file = str(output_dir / "title_review.csv")
+
+        # 加载已有 CSV 中的视觉数据（避免覆盖之前的处理结果）
+        existing_vision = {}
+        if Path(output_file).exists():
+            try:
+                with open(output_file, "r", encoding="utf-8-sig") as f:
+                    for r in csv.DictReader(f):
+                        path = r.get("original_path", "")
+                        desc = r.get("vision_description", "").strip()
+                        kw = r.get("vision_keywords", "").strip()
+                        if path and (desc or kw):
+                            existing_vision[path] = r
+            except Exception:
+                pass
+
         dir_prefix = str(target_path) + "%"
         rows = self.db_store.conn.execute(
             """SELECT * FROM media_files
@@ -421,16 +441,16 @@ class Scanner:
             logger.info("[完成] 所有文件已完成视觉识别，无需生成 CSV")
             return
 
-        # 生成 CSV
-        output_dir = self.output_dir / target_path.name
-        output_dir.mkdir(parents=True, exist_ok=True)
-        output_file = str(output_dir / "title_review.csv")
-
         csv_rows = []
         for r in valid_rows:
+            path = r.get("original_path", "")
+            # 如果已有 CSV 中包含该路径的视觉数据，直接复用
+            if path in existing_vision:
+                csv_rows.append(existing_vision[path])
+                continue
             csv_rows.append({
                 "original_title": r.get("original_title", ""),
-                "original_path": r.get("original_path", ""),
+                "original_path": path,
                 "needs_vision": "true",
                 "final_name": r.get("final_name", ""),
                 "review_status": "待确认",
