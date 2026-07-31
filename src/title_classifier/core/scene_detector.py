@@ -42,12 +42,19 @@ def detect_scenes(video_path: str, threshold: float = 0.3, sample_interval: floa
     frame_idx = 0
     last_log_pct = 0
 
+    # 使用 grab() 快速跳过 + 仅对目标帧 retrieve() 解码（~3x 提速）
     while True:
-        ret, frame = cap.read()
+        ret = cap.grab()
         if not ret:
             break
 
         if frame_idx % step != 0:
+            frame_idx += 1
+            continue
+
+        # 只对采样帧做昂贵解码
+        ret, frame = cap.retrieve()
+        if not ret:
             frame_idx += 1
             continue
 
