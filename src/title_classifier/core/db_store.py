@@ -63,6 +63,7 @@ class MediaDB:
             file_size=data.get("file_size"),
             duration=data.get("duration"),
             resolution=data.get("resolution"),
+            path=data.get("original_path") or data.get("current_path"),
         )
         if existing:
             # 匹配到已有记录，更新路径
@@ -140,11 +141,27 @@ class MediaDB:
         return dict(row) if row else None
 
     def find_match(self, original_title: str, file_size: int = None, duration: float = None,
-                   resolution: str = None) -> Optional[dict]:
+                   resolution: str = None, path: str = None) -> Optional[dict]:
         """
-        严格匹配：original_title + file_size + resolution + duration 全部一致才认为是重复文件。
-        任一字段缺失或不符合则不算重复，允许入库。
+        两级匹配逻辑：
+
+        1. 路径匹配（精确）：path 精确匹配 current_path 或 original_path
+           → 同一文件已入库，更新元数据。
+
+        2. 内容匹配（追踪）：完整 original_title + file_size + duration + resolution
+           全部一致，且 DB 中旧路径已不存在（文件移动/重新上传）
+           → 追踪为同一文件，更新路径。
+           四维度联合匹配仅约 0.2% 重复，可安全用于追踪。
         """
+        # 1. 路径精确匹配（最高优先级）
+        if path:
+            row = self.conn.execute(
+                "SELECT * FROM media_files WHERE current_path=? OR original_path=?",
+                (path, path)
+            ).fetchone()
+            if row:
+                return dict(row)
+
         if not original_title:
             return None
 
@@ -152,32 +169,40 @@ class MediaDB:
         if not original_title:
             return None
 
+        # 2. 内容匹配：剥离 [关键词]_ 前缀后的标题 + size + duration + resolution
+        #    且旧路径已不存在 → 判定为文件移动/重命名，追踪到已有记录
+        from .scanner import strip_bracket_prefix
+
+        stripped = strip_bracket_prefix(original_title)
+        if not stripped:
+            return None
+
+        # 候选：精确标题，或带 [xxx]_ 前缀的标题（在 Python 中剥离后比较）
         candidates = self.conn.execute(
-            "SELECT * FROM media_files WHERE original_title=?", (original_title,)
+            "SELECT * FROM media_files WHERE original_title = ? OR original_title LIKE ?",
+            (stripped, "[%]%")
         ).fetchall()
 
         for c in candidates:
-            if file_size:
-                db_size = c["file_size"]
-                if db_size and db_size > 0:
-                    if abs(db_size - file_size) / db_size > 0.001:
-                        continue
-                elif db_size is None:
+            if strip_bracket_prefix(c["original_title"]) != stripped:
+                continue
+
+            # 精确验证 size / duration / resolution（DB 为 NULL 时视为未知，不阻断）
+            if file_size is not None and file_size > 0 and c["file_size"]:
+                if abs(c["file_size"] - file_size) / max(c["file_size"], 1) > 0.001:
                     continue
-            if duration:
-                db_dur = c["duration"]
-                if db_dur and db_dur > 0:
-                    if abs(db_dur - duration) > 0.5:
-                        continue
-                elif db_dur is None:
+            if duration is not None and duration > 0 and c["duration"]:
+                if abs(c["duration"] - duration) > 0.5:
                     continue
-            if resolution:
-                db_res = c["resolution"]
-                if db_res and db_res != resolution:
-                    continue
-                elif db_res is None:
-                    continue
-            return dict(c)
+            if resolution and c["resolution"] and c["resolution"] != resolution:
+                continue
+
+            old_cur = c["current_path"]
+            old_orig = c["original_path"]
+            old_cur_missing = old_cur and not Path(old_cur).exists()
+            old_orig_missing = old_orig and not Path(old_orig).exists()
+            if (old_cur_missing and old_orig_missing) or (old_cur_missing and not old_orig):
+                return dict(c)
 
         return None
 
@@ -365,8 +390,8 @@ class MediaDB:
             params.extend(tags)
 
         if query:
-            wheres.append("(m.original_title LIKE ? OR m.final_name LIKE ? OR m.vision_description LIKE ?)")
-            params.extend([f"%{query}%"] * 3)
+            wheres.append("(m.original_title LIKE ? OR m.final_name LIKE ? OR m.vision_description LIKE ? OR m.vision_keywords LIKE ?)")
+            params.extend([f"%{query}%"] * 4)
 
         if source:
             wheres.append("m.original_path LIKE ?")
@@ -453,6 +478,7 @@ class MediaDB:
                     original_title=row.get("original_title", ""),
                     file_size=file_size,
                     duration=duration,
+                    path=original_path,
                 )
 
                 data = {
