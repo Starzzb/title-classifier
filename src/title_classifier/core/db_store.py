@@ -95,7 +95,8 @@ class MediaDB:
         """修复 media_files.fingerprint_id 外键误引用 video_fingerprints_old 的问题。
 
         旧版迁移用 ALTER TABLE RENAME 导致外键被改写为指向已删除的旧表名，
-        这里检测并重建 media_files 表修正外键。
+        这里检测并重建 media_files 表修正外键。列定义从 PRAGMA table_info
+        动态读取，避免硬编码列清单导致后续新增列在重建时被丢弃。
         """
         try:
             row = self.conn.execute(
@@ -106,46 +107,35 @@ class MediaDB:
             if "video_fingerprints_old" not in row[0]:
                 return
             logger.info("检测到 media_files 外键误引用 video_fingerprints_old，重建表...")
+
+            cols = self.conn.execute("PRAGMA table_info(media_files)").fetchall()
+            col_defs = []
+            for c in cols:
+                cid, name, ctype, notnull, dflt, pk = c
+                parts = [f'"{name}" {ctype}']
+                if pk:
+                    parts.append("PRIMARY KEY AUTOINCREMENT" if cid == 0 else "PRIMARY KEY")
+                if notnull:
+                    parts.append("NOT NULL")
+                if dflt is not None:
+                    # PRAGMA dflt_value 是原样文本，但表达式默认值已被去掉外层括号，
+                    # SQLite 要求非字面量默认值必须加括号，统一包一层总是合法。
+                    parts.append(f"DEFAULT ({dflt})")
+                # 外键：把指向旧表名的引用重写为 video_fingerprints(id)
+                if name == "fingerprint_id":
+                    parts.append("REFERENCES video_fingerprints(id)")
+                col_defs.append(" ".join(parts))
+
             self.conn.execute("PRAGMA foreign_keys=OFF")
-            self.conn.executescript("""
-                CREATE TABLE media_files_new (
-                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                    original_title  TEXT NOT NULL,
-                    original_path   TEXT NOT NULL,
-                    current_path    TEXT,
-                    file_size       INTEGER,
-                    duration        REAL,
-                    resolution      TEXT,
-                    file_hash       TEXT,
-                    final_name      TEXT,
-                    vision_description TEXT,
-                    vision_keywords TEXT,
-                    human_detected  INTEGER DEFAULT 0,
-                    detection_method TEXT,
-                    needs_vision    INTEGER DEFAULT 1,
-                    audio_recognized INTEGER DEFAULT 0,
-                    review_status   TEXT DEFAULT '待确认',
-                    srt_path        TEXT,
-                    fingerprint_id  INTEGER REFERENCES video_fingerprints(id),
-                    created_at      TEXT DEFAULT (datetime('now', 'localtime')),
-                    updated_at      TEXT DEFAULT (datetime('now', 'localtime')),
-                    faststart INTEGER DEFAULT 0,
-                    video_codec TEXT DEFAULT ''
-                );
-                INSERT INTO media_files_new (
-                    id, original_title, original_path, current_path, file_size, duration, resolution,
-                    file_hash, final_name, vision_description, vision_keywords, human_detected,
-                    detection_method, needs_vision, audio_recognized, review_status, srt_path,
-                    fingerprint_id, created_at, updated_at, faststart, video_codec
-                )
-                SELECT id, original_title, original_path, current_path, file_size, duration, resolution,
-                    file_hash, final_name, vision_description, vision_keywords, human_detected,
-                    detection_method, needs_vision, audio_recognized, review_status, srt_path,
-                    fingerprint_id, created_at, updated_at, faststart, video_codec
-                FROM media_files;
-                DROP TABLE media_files;
-                ALTER TABLE media_files_new RENAME TO media_files;
-            """)
+            self.conn.execute(
+                f'CREATE TABLE media_files_new ({", ".join(col_defs)})'
+            )
+            col_names = ", ".join(f'"{c[1]}"' for c in cols)
+            self.conn.execute(
+                f"INSERT INTO media_files_new ({col_names}) SELECT {col_names} FROM media_files"
+            )
+            self.conn.execute("DROP TABLE media_files")
+            self.conn.execute("ALTER TABLE media_files_new RENAME TO media_files")
             self.conn.executescript("""
                 CREATE INDEX IF NOT EXISTS idx_media_original_path ON media_files(original_path);
                 CREATE INDEX IF NOT EXISTS idx_media_current_path ON media_files(current_path);

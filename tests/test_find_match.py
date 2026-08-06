@@ -16,6 +16,85 @@ def _make_db(tmp_path) -> MediaDB:
     return db
 
 
+def test_fk_repair_preserves_future_columns(tmp_path):
+    """模拟旧版迁移遗留：media_files 外键误指向 video_fingerprints_old。
+
+    同时额外加入未来才有的新列，验证 _repair_fingerprint_fk 动态重建时
+    能保留全部列而不丢列。
+    """
+    db_path = str(tmp_path / "test.db")
+    db = MediaDB(db_path=db_path)
+    db.init_schema()
+    db.conn.execute("PRAGMA foreign_keys=OFF")
+    db.conn.execute(
+        "INSERT INTO media_files (original_title, original_path, current_path, file_size, duration)"
+        " VALUES ('v1.mp4', 'D:\\t\\v1.mp4', 'D:\\t\\v1.mp4', 1000, 10.0)"
+    )
+    # 模拟一个“未来新增”的列
+    db.conn.execute("ALTER TABLE media_files ADD COLUMN future_note TEXT DEFAULT 'x'")
+    # 模拟旧版迁移造成的坏外键（ALTER TABLE RENAME 的副作用）
+    db.conn.execute(
+        "ALTER TABLE media_files RENAME TO media_files_bad"
+    )
+    db.conn.execute(
+        'CREATE TABLE media_files ('
+        ' id INTEGER PRIMARY KEY AUTOINCREMENT,'
+        ' original_title TEXT NOT NULL,'
+        ' original_path TEXT NOT NULL,'
+        ' current_path TEXT,'
+        ' file_size INTEGER,'
+        ' duration REAL,'
+        ' resolution TEXT,'
+        ' file_hash TEXT,'
+        ' final_name TEXT,'
+        ' vision_description TEXT,'
+        ' vision_keywords TEXT,'
+        ' human_detected INTEGER DEFAULT 0,'
+        ' detection_method TEXT,'
+        ' needs_vision INTEGER DEFAULT 1,'
+        ' audio_recognized INTEGER DEFAULT 0,'
+        ' review_status TEXT DEFAULT \'待确认\','
+        ' srt_path TEXT,'
+        ' fingerprint_id INTEGER REFERENCES video_fingerprints_old(id),'
+        ' created_at TEXT DEFAULT (datetime(\'now\', \'localtime\')),'
+        ' updated_at TEXT DEFAULT (datetime(\'now\', \'localtime\')),'
+        ' faststart INTEGER DEFAULT 0,'
+        ' video_codec TEXT DEFAULT \'\','
+        ' future_note TEXT DEFAULT \'x\''
+        ')'
+    )
+    db.conn.execute("PRAGMA foreign_keys=OFF")
+    db.conn.execute(
+        "INSERT INTO media_files (id, original_title, original_path, current_path, future_note)"
+        " SELECT id, original_title, original_path, current_path, future_note FROM media_files_bad"
+    )
+    db.conn.execute("DROP TABLE media_files_bad")
+    db.conn.commit()
+    db.close()
+
+    # 重新 init_schema 触发 _repair_fingerprint_fk
+    db = MediaDB(db_path=db_path)
+    db.init_schema()
+    row = db.conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='media_files'"
+    ).fetchone()
+    assert "video_fingerprints_old" not in row[0]
+    assert "video_fingerprints(id)" in row[0]
+    cols = [c[1] for c in db.conn.execute("PRAGMA table_info(media_files)").fetchall()]
+    assert "future_note" in cols, "未来新增列在重建时被丢弃"
+    assert "faststart" in cols and "video_codec" in cols
+    # 数据完整保留
+    n = db.conn.execute("SELECT COUNT(*) FROM media_files").fetchone()[0]
+    assert n > 0
+    # 外键开启时 DML 可用
+    db.conn.execute("PRAGMA foreign_keys=ON")
+    mid = db.conn.execute("SELECT id FROM media_files LIMIT 1").fetchone()[0]
+    db.conn.execute("DELETE FROM media_files WHERE id = ?", (mid,))
+    db.conn.commit()
+    db.close()
+
+
+
 def test_l1_path_match(tmp_path):
     db = _make_db(tmp_path)
     db.insert_media({
