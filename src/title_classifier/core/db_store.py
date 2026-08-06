@@ -52,7 +52,12 @@ class MediaDB:
         logger.info(f"数据库初始化完成: {self.db_path}")
 
     def _migrate_fingerprints(self):
-        """迁移旧版 video_fingerprints 表：去掉 UNIQUE(file_size, duration) 约束"""
+        """迁移旧版 video_fingerprints 表：去掉 UNIQUE(file_size, duration) 约束。
+
+        注意：不能用 ALTER TABLE video_fingerprints RENAME TO xxx 方式，
+        那会让 SQLite 自动改写 media_files.fingerprint_id 的外键引用指向旧表名。
+        正确做法：新建表 → 复制数据 → 删旧表 → 新表改名回原名。
+        """
         try:
             sql = self.conn.execute(
                 "SELECT sql FROM sqlite_master WHERE type='table' AND name='video_fingerprints'"
@@ -61,19 +66,97 @@ class MediaDB:
                 return
             if "UNIQUE(file_size, duration)" in sql[0]:
                 logger.info("检测到旧版 video_fingerprints UNIQUE 约束，重建表...")
+                self.conn.execute("PRAGMA foreign_keys=OFF")
                 self.conn.executescript("""
-                    DROP TABLE IF EXISTS video_fingerprints_old;
-                    ALTER TABLE video_fingerprints RENAME TO video_fingerprints_old;
+                    CREATE TABLE video_fingerprints_new (
+                        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                        file_size       INTEGER NOT NULL,
+                        duration        REAL NOT NULL,
+                        file_hash       TEXT,
+                        first_seen      TEXT DEFAULT (datetime('now', 'localtime')),
+                        last_seen       TEXT DEFAULT (datetime('now', 'localtime'))
+                    );
+                    INSERT INTO video_fingerprints_new (id, file_size, duration, file_hash, first_seen, last_seen)
+                        SELECT id, file_size, duration, file_hash, first_seen, last_seen FROM video_fingerprints;
+                    DROP TABLE video_fingerprints;
+                    ALTER TABLE video_fingerprints_new RENAME TO video_fingerprints;
+                    CREATE INDEX IF NOT EXISTS idx_fingerprint_size_dur ON video_fingerprints(file_size, duration);
+                    CREATE INDEX IF NOT EXISTS idx_fingerprint_hash ON video_fingerprints(file_hash);
                 """)
-                self.conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
-                self.conn.execute("""
-                    INSERT INTO video_fingerprints (id, file_size, duration, file_hash, first_seen, last_seen)
-                    SELECT id, file_size, duration, file_hash, first_seen, last_seen FROM video_fingerprints_old
-                """)
-                self.conn.execute("DROP TABLE IF EXISTS video_fingerprints_old")
+                self.conn.execute("PRAGMA foreign_keys=ON")
                 logger.info("video_fingerprints 表已重建（去掉 UNIQUE 约束）")
+
+            # 修复历史迁移遗留：media_files 外键误指向 video_fingerprints_old
+            self._repair_fingerprint_fk()
         except Exception as e:
             logger.warning(f"video_fingerprints 迁移失败: {e}")
+
+    def _repair_fingerprint_fk(self):
+        """修复 media_files.fingerprint_id 外键误引用 video_fingerprints_old 的问题。
+
+        旧版迁移用 ALTER TABLE RENAME 导致外键被改写为指向已删除的旧表名，
+        这里检测并重建 media_files 表修正外键。
+        """
+        try:
+            row = self.conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='media_files'"
+            ).fetchone()
+            if not row:
+                return
+            if "video_fingerprints_old" not in row[0]:
+                return
+            logger.info("检测到 media_files 外键误引用 video_fingerprints_old，重建表...")
+            self.conn.execute("PRAGMA foreign_keys=OFF")
+            self.conn.executescript("""
+                CREATE TABLE media_files_new (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    original_title  TEXT NOT NULL,
+                    original_path   TEXT NOT NULL,
+                    current_path    TEXT,
+                    file_size       INTEGER,
+                    duration        REAL,
+                    resolution      TEXT,
+                    file_hash       TEXT,
+                    final_name      TEXT,
+                    vision_description TEXT,
+                    vision_keywords TEXT,
+                    human_detected  INTEGER DEFAULT 0,
+                    detection_method TEXT,
+                    needs_vision    INTEGER DEFAULT 1,
+                    audio_recognized INTEGER DEFAULT 0,
+                    review_status   TEXT DEFAULT '待确认',
+                    srt_path        TEXT,
+                    fingerprint_id  INTEGER REFERENCES video_fingerprints(id),
+                    created_at      TEXT DEFAULT (datetime('now', 'localtime')),
+                    updated_at      TEXT DEFAULT (datetime('now', 'localtime')),
+                    faststart INTEGER DEFAULT 0,
+                    video_codec TEXT DEFAULT ''
+                );
+                INSERT INTO media_files_new (
+                    id, original_title, original_path, current_path, file_size, duration, resolution,
+                    file_hash, final_name, vision_description, vision_keywords, human_detected,
+                    detection_method, needs_vision, audio_recognized, review_status, srt_path,
+                    fingerprint_id, created_at, updated_at, faststart, video_codec
+                )
+                SELECT id, original_title, original_path, current_path, file_size, duration, resolution,
+                    file_hash, final_name, vision_description, vision_keywords, human_detected,
+                    detection_method, needs_vision, audio_recognized, review_status, srt_path,
+                    fingerprint_id, created_at, updated_at, faststart, video_codec
+                FROM media_files;
+                DROP TABLE media_files;
+                ALTER TABLE media_files_new RENAME TO media_files;
+            """)
+            self.conn.executescript("""
+                CREATE INDEX IF NOT EXISTS idx_media_original_path ON media_files(original_path);
+                CREATE INDEX IF NOT EXISTS idx_media_current_path ON media_files(current_path);
+                CREATE INDEX IF NOT EXISTS idx_media_final_name ON media_files(final_name);
+                CREATE INDEX IF NOT EXISTS idx_media_file_hash ON media_files(file_hash);
+                CREATE INDEX IF NOT EXISTS idx_media_fingerprint ON media_files(fingerprint_id);
+            """)
+            self.conn.execute("PRAGMA foreign_keys=ON")
+            logger.info("media_files 外键已修复")
+        except Exception as e:
+            logger.warning(f"media_files 外键修复失败: {e}")
 
     def close(self):
         """关闭连接"""
