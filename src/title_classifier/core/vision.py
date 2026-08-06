@@ -1960,7 +1960,25 @@ class VisionProcessor:
             if not media_record:
                 # 尝试按文件名模糊匹配
                 fname = Path(video_path).name
-                media_record = self.db_store.find_match(original_title=fname)
+                media_record = self.db_store.find_match(original_title=fname, path=str(video_path))
+            if not media_record:
+                # 内容指纹兜底：重命名/移动未重扫的视频，找回原记录
+                try:
+                    from ..utils.fingerprint import compute_partial_hash
+                    fhash = compute_partial_hash(video_path)
+                    if fhash:
+                        fp = self.db_store.find_fingerprint_by_hash(fhash)
+                        if fp:
+                            media_record = self.db_store.conn.execute(
+                                "SELECT * FROM media_files WHERE fingerprint_id=?",
+                                (fp["id"],)
+                            ).fetchone()
+                            if media_record:
+                                media_record = dict(media_record)
+                                self.db_store.update_media(
+                                    media_record["id"], "current_path", str(video_path), "vision")
+                except Exception as e:
+                    logger.debug(f"指纹查找失败: {e}")
             if not media_record:
                 # DB 中无记录，创建新记录
                 logger.info(f"DB 中无记录，创建新记录: {video_path}")

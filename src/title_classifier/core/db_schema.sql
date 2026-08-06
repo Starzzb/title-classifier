@@ -2,15 +2,17 @@
 -- SQLite 3
 
 -- 视频指纹表（用于去重）
+-- 注意：不设 UNIQUE(file_size, duration)，允许不同文件同 size+duration（靠 file_hash 区分）
 CREATE TABLE IF NOT EXISTS video_fingerprints (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     file_size       INTEGER NOT NULL,
     duration        REAL NOT NULL,
     file_hash       TEXT,
     first_seen      TEXT DEFAULT (datetime('now', 'localtime')),
-    last_seen       TEXT DEFAULT (datetime('now', 'localtime')),
-    UNIQUE(file_size, duration)
+    last_seen       TEXT DEFAULT (datetime('now', 'localtime'))
 );
+CREATE INDEX IF NOT EXISTS idx_fingerprint_size_dur ON video_fingerprints(file_size, duration);
+CREATE INDEX IF NOT EXISTS idx_fingerprint_hash ON video_fingerprints(file_hash);
 
 -- 媒体文件主表
 CREATE TABLE IF NOT EXISTS media_files (
