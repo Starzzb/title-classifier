@@ -319,27 +319,20 @@ class Scanner:
                 "review_status": "已规范化" if classified else "待确认",
             }
 
+            # 计算内容指纹，作为"是否同一视频"的最终裁决依据（严格确认）
+            file_hash = None
+            if file_size and duration:
+                from ..utils.fingerprint import compute_partial_hash
+                file_hash = compute_partial_hash(str(file_path))
+
             existing = self.db_store.find_match(
                 original_title=file_path.name,
                 file_size=file_size,
                 duration=duration,
                 resolution=resolution,
                 path=str(file_path),
+                file_hash=file_hash,
             )
-
-            # 未命中：计算内容指纹（L3 消歧），仍无 → 新建指纹+记录
-            file_hash = None
-            if not existing and file_size and duration:
-                from ..utils.fingerprint import compute_partial_hash
-                file_hash = compute_partial_hash(str(file_path))
-                if file_hash:
-                    existing = self.db_store.find_match(
-                        original_title=file_path.name,
-                        file_size=file_size,
-                        duration=duration,
-                        resolution=resolution,
-                        file_hash=file_hash,
-                    )
 
             if existing:
                 changed = False
@@ -388,6 +381,8 @@ class Scanner:
                     fp_id = self.db_store.get_fingerprint_id(file_size, duration, file_hash)
                 if fp_id:
                     data["fingerprint_id"] = fp_id
+                if file_hash:
+                    data["file_hash"] = file_hash
                 self.db_store.insert_media(data)
                 inserted += 1
 

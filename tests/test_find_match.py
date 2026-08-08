@@ -110,7 +110,7 @@ def test_l1_path_match(tmp_path):
 
 
 def test_l2_coarse_fingerprint(tmp_path):
-    """size+duration 唯一候选 → 无需哈希即可追踪"""
+    """size+duration 唯一候选 + hash 一致 → 移动/重命名后可追踪"""
     db = _make_db(tmp_path)
     fp_id = db.get_fingerprint_id(1000, 10.0, "hash_abc")
     db.insert_media({
@@ -121,9 +121,33 @@ def test_l2_coarse_fingerprint(tmp_path):
         "duration": 10.0,
         "fingerprint_id": fp_id,
     })
-    # 移动/重命名：路径不同、标题不同，但 size+duration 相同
-    m = db.find_match(original_title="renamed.mp4", file_size=1000, duration=10.4)
+    # 移动/重命名：路径不同、标题不同，但 size+duration+hash 相同
+    m = db.find_match(original_title="renamed.mp4", file_size=1000, duration=10.4,
+                      file_hash="hash_abc")
     assert m is not None and m["original_title"] == "video1.mp4"
+    db.close()
+
+
+def test_path_hit_but_hash_differs_is_not_same(tmp_path):
+    """路径相同但内容已被替换（hash 不同）→ 判定不是同一视频，返回 None。
+
+    这是核心防误判场景：磁盘文件被替换成同 size+duration 但不同内容的新视频，
+    旧记录指纹 hash 与磁盘 hash 不同 → 必须拒绝匹配，由调用方新建记录。
+    """
+    db = _make_db(tmp_path)
+    fp_id = db.get_fingerprint_id(1000, 10.0, "old_content_hash")
+    db.insert_media({
+        "original_title": "video1.mp4",
+        "original_path": "D:\\test\\video1.mp4",
+        "current_path": "D:\\test\\video1.mp4",
+        "file_size": 1000,
+        "duration": 10.0,
+        "fingerprint_id": fp_id,
+    })
+    # 磁盘上是新内容：size+duration 相同、路径相同，但 hash 不同
+    m = db.find_match(original_title="video1.mp4", file_size=1000, duration=10.0,
+                      path="D:\\test\\video1.mp4", file_hash="new_content_hash")
+    assert m is None
     db.close()
 
 

@@ -162,6 +162,7 @@ class MediaDB:
             duration=data.get("duration"),
             resolution=data.get("resolution"),
             path=data.get("original_path") or data.get("current_path"),
+            file_hash=data.get("file_hash"),  # 调用方已算好则用于严格确认
         )
 
         # 未命中：尝试内容指纹消歧
@@ -267,100 +268,147 @@ class MediaDB:
     def find_match(self, original_title: str, file_size: int = None, duration: float = None,
                    resolution: str = None, path: str = None, file_hash: str = None) -> Optional[dict]:
         """
-        四级匹配逻辑：
+        匹配确认流程：从宽松到严密，逐级确认两个视频确实是同一个。
 
-        L1 路径精确匹配：path 精确匹配 current_path 或 original_path
-           → 同一文件已入库（覆盖未变文件，零成本）。
+        设计原则：
+          - 收集候选要宽松（宁多勿漏）：路径 / 粗指纹 / 标题 / 哈希 都会成为候选。
+          - 确认要严密（宁缺勿滥）：必须有足够强的证据才判定"是同一视频"，
+            任何内容矛盾（哈希不同 / size 差异大）立即排除该候选。
+          - 排除要宽松：一旦发现 hash 或 size 矛盾，立刻否定，不做多余推断。
 
-        L2 粗指纹匹配：file_size + duration 唯一命中 video_fingerprints
-           → 文件移动/重命名后，内容未变，靠粗指纹追踪（无需哈希）。
-
-        L3 哈希精确匹配：file_hash 命中指纹 → 内容真实相同，可安全追踪
-           （仅 L2 歧义或需要消歧时使用）。
-
-        L4 标题兜底：剥离 [关键词]_ 前缀后的标题 + size + duration + resolution，
-           且 DB 旧路径已不存在 → 图片 / 无指纹记录 / 哈希失败时兜底。
+        证据强度（由强到弱，取分最高者，0 分即排除）：
+          E1 内容哈希一致：file_hash == 候选指纹 hash → 100% 同一（4 分）
+          E2 路径命中 + size 一致（记录无 hash 可证伪）→ 高度同一（3 分）
+          E3 size+duration 粗指纹命中，且候选指纹无 hash 可证伪 → 弱证据兜底（2 分）
+          E4 剥离前缀标题 + size+duration+resolution + 旧路径不存在 → 最后兜底（1 分）
         """
-        # L1 路径精确匹配（最高优先级）
+        from .scanner import strip_bracket_prefix
+
+        def _cand_fp_hash(cand: dict) -> Optional[str]:
+            """候选记录的指纹 hash（无指纹则返回 None）"""
+            if not cand.get("fingerprint_id"):
+                return None
+            row = self.conn.execute(
+                "SELECT file_hash FROM video_fingerprints WHERE id=?",
+                (cand["fingerprint_id"],),
+            ).fetchone()
+            return row["file_hash"] if row else None
+
+        def _confirm(cand: dict) -> int:
+            """严密确认候选 == 当前文件，返回证据分数（0 表示排除）。"""
+            c_hash = _cand_fp_hash(cand)
+
+            # 哈希矛盾 → 立即排除（宽松排除：宁可新建，不误判为同一）
+            if file_hash and c_hash and file_hash != c_hash:
+                return 0
+
+            # E1 哈希一致 → 100% 同一
+            if file_hash and c_hash and file_hash == c_hash:
+                return 4
+
+            # E2 路径命中 + size 无矛盾
+            if path and (cand.get("current_path") == path or cand.get("original_path") == path):
+                if file_size and cand.get("file_size"):
+                    if abs(file_size - cand["file_size"]) / max(cand["file_size"], 1) > 0.001:
+                        return 0  # size 矛盾 → 文件被替换
+                # 路径命中且无 size 矛盾：
+                #   候选无 hash（无法证伪）或调用方未提供 hash → 视为同一
+                return 3
+
+            # E3 粗指纹：size+duration 命中候选指纹，且候选指纹无 hash 可证伪
+            if file_size and duration and cand.get("fingerprint_id"):
+                fp = self.conn.execute(
+                    "SELECT * FROM video_fingerprints WHERE id=?",
+                    (cand["fingerprint_id"],),
+                ).fetchone()
+                if fp:
+                    size_ok = abs(fp["file_size"] - file_size) / max(fp["file_size"], 1) <= 0.001
+                    dur_ok = abs(fp["duration"] - duration) <= 0.5
+                    if size_ok and dur_ok and not c_hash:
+                        return 2  # 无 hash 可证伪，弱证据接受
+
+            # E4 标题兜底：剥离前缀标题 + size/duration/resolution + 旧路径不存在
+            stripped = strip_bracket_prefix(original_title or "")
+            if stripped and strip_bracket_prefix(cand.get("original_title") or "") == stripped:
+                if file_size and cand.get("file_size"):
+                    if abs(file_size - cand["file_size"]) / max(cand["file_size"], 1) > 0.001:
+                        return 0
+                if duration and cand.get("duration"):
+                    if abs(duration - cand["duration"]) > 0.5:
+                        return 0
+                if resolution and cand.get("resolution") and cand["resolution"] != resolution:
+                    return 0
+                old_cur = cand.get("current_path")
+                old_orig = cand.get("original_path")
+                old_cur_missing = old_cur and not Path(old_cur).exists()
+                old_orig_missing = old_orig and not Path(old_orig).exists()
+                if (old_cur_missing and old_orig_missing) or (old_cur_missing and not old_orig):
+                    return 1
+            return 0
+
+        # ============ 宽松收集候选（宁多勿漏） ============
+        candidates: dict[int, dict] = {}
+
+        # C1 路径候选
         if path:
             row = self.conn.execute(
                 "SELECT * FROM media_files WHERE current_path=? OR original_path=?",
-                (path, path)
+                (path, path),
             ).fetchone()
             if row:
-                return dict(row)
+                candidates[row["id"]] = dict(row)
 
-        # L2 粗指纹匹配：size + duration 唯一候选 → 内容未变即可追踪
+        # C2 粗指纹候选
         if file_size and duration:
             fps = self.conn.execute(
                 """SELECT * FROM video_fingerprints
                    WHERE ABS(file_size - ?) / MAX(file_size, 1) <= 0.001
                      AND ABS(duration - ?) <= 0.5""",
-                (file_size, duration)
+                (file_size, duration),
             ).fetchall()
-            if len(fps) == 1:
+            for fp in fps:
                 media = self.conn.execute(
                     "SELECT * FROM media_files WHERE fingerprint_id=?",
-                    (fps[0]["id"],)
+                    (fp["id"],),
                 ).fetchone()
                 if media:
-                    self.update_fingerprint_last_seen(fps[0]["id"])
-                    return dict(media)
+                    candidates.setdefault(media["id"], dict(media))
 
-        # L3 哈希精确匹配：内容真实相同，安全追踪（无需"旧路径不存在"）
+        # C3 哈希候选（最强证据，单独优先）
         if file_hash:
             fp = self.find_fingerprint_by_hash(file_hash)
             if fp:
                 media = self.conn.execute(
                     "SELECT * FROM media_files WHERE fingerprint_id=?",
-                    (fp["id"],)
+                    (fp["id"],),
                 ).fetchone()
                 if media:
-                    self.update_fingerprint_last_seen(fp["id"])
-                    return dict(media)
+                    candidates.setdefault(media["id"], dict(media))
 
-        if not original_title:
-            return None
+        # C4 标题候选
+        stripped = strip_bracket_prefix(original_title or "")
+        if stripped:
+            for c in self.conn.execute(
+                "SELECT * FROM media_files WHERE original_title = ? OR original_title LIKE ?",
+                (stripped, "[%]%"),
+            ).fetchall():
+                if strip_bracket_prefix(c["original_title"]) == stripped:
+                    candidates.setdefault(c["id"], dict(c))
 
-        original_title = original_title.strip()
-        if not original_title:
-            return None
+        # ============ 严密确认：取证据分数最高的确认候选 ============
+        best: Optional[dict] = None
+        best_score = 0
+        for cand in candidates.values():
+            score = _confirm(cand)
+            if score > best_score:
+                best = cand
+                best_score = score
 
-        # L4 标题兜底：剥离 [关键词]_ 前缀后的标题 + size + duration + resolution
-        #    且旧路径已不存在 → 判定为文件移动/重命名，追踪到已有记录
-        from .scanner import strip_bracket_prefix
-
-        stripped = strip_bracket_prefix(original_title)
-        if not stripped:
-            return None
-
-        # 候选：精确标题，或带 [xxx]_ 前缀的标题（在 Python 中剥离后比较）
-        candidates = self.conn.execute(
-            "SELECT * FROM media_files WHERE original_title = ? OR original_title LIKE ?",
-            (stripped, "[%]%")
-        ).fetchall()
-
-        for c in candidates:
-            if strip_bracket_prefix(c["original_title"]) != stripped:
-                continue
-
-            # 精确验证 size / duration / resolution（DB 为 NULL 时视为未知，不阻断）
-            if file_size is not None and file_size > 0 and c["file_size"]:
-                if abs(c["file_size"] - file_size) / max(c["file_size"], 1) > 0.001:
-                    continue
-            if duration is not None and duration > 0 and c["duration"]:
-                if abs(c["duration"] - duration) > 0.5:
-                    continue
-            if resolution and c["resolution"] and c["resolution"] != resolution:
-                continue
-
-            old_cur = c["current_path"]
-            old_orig = c["original_path"]
-            old_cur_missing = old_cur and not Path(old_cur).exists()
-            old_orig_missing = old_orig and not Path(old_orig).exists()
-            if (old_cur_missing and old_orig_missing) or (old_cur_missing and not old_orig):
-                return dict(c)
-
+        if best:
+            fp_id = best.get("fingerprint_id")
+            if fp_id:
+                self.update_fingerprint_last_seen(fp_id)
+            return best
         return None
 
     def list_all(self, limit: int = 100, offset: int = 0) -> List[dict]:
