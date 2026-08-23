@@ -518,13 +518,17 @@ class YOLODetector(BaseDetector):
         # 并行运行三个模型
         model_timing = {}
 
+        detect_result = None
+        pose_result = None
+
         if "detect" in self._models:
             try:
                 t0 = time.perf_counter()
-                results["detection"] = self.detect(frame)
+                detect_result = self.detect(frame)
+                results["detection"] = detect_result
                 model_timing["detect"] = time.perf_counter() - t0
                 results["models_used"].append("detect")
-                det = results["detection"]
+                det = detect_result
                 n_persons = len(det.get("persons", []))
                 max_conf = det.get("max_confidence", 0)
                 logger.debug(f"[YOLO] detect: {n_persons}人, 置信度={max_conf:.3f}, 耗时={model_timing['detect']:.3f}s")
@@ -535,10 +539,11 @@ class YOLODetector(BaseDetector):
         if "pose" in self._models:
             try:
                 t0 = time.perf_counter()
-                results["pose"] = self.estimate_pose(frame)
+                pose_result = self.estimate_pose(frame)
+                results["pose"] = pose_result
                 model_timing["pose"] = time.perf_counter() - t0
                 results["models_used"].append("pose")
-                pose = results["pose"]
+                pose = pose_result
                 kpts = pose.get("visible_keypoints", 0)
                 analysis = pose.get("pose_analysis", [])
                 logger.debug(f"[YOLO] pose: 关键点={kpts}/17, 姿态={analysis}, 耗时={model_timing['pose']:.3f}s")
@@ -546,7 +551,16 @@ class YOLODetector(BaseDetector):
                 model_timing["pose"] = 0
                 logger.warning(f"pose模型推理失败: {e}")
 
-        if "segment" in self._models:
+        # 早退：detect 与 pose 都运行且均为阴性 → 投票不可能≥2，跳过 segment
+        skip_segment = (
+            "segment" in self._models
+            and "detect" in self._models and "pose" in self._models
+            and not (detect_result or {}).get("has_person", False)
+            and not (pose_result or {}).get("has_person", False)
+        )
+        if skip_segment:
+            logger.debug("detect与pose均未检出人体，跳过segment推理")
+        elif "segment" in self._models:
             try:
                 t0 = time.perf_counter()
                 results["segment"] = self.segment_instances(frame)
