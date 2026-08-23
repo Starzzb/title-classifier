@@ -114,8 +114,9 @@ def main():
             linked += 1
 
         done += 1
-        if done % 200 == 0:
-            print(f"  进度: {done}/{len(rows)}  ({time.time()-t0:.0f}s)")
+        if done % 50 == 0 or done == len(rows):
+            print(f"  进度: {done}/{len(rows)}  ({time.time()-t0:.0f}s) 当前: {Path(path).name[:40]}")
+            sys.stdout.flush()
 
     if not args.dry_run:
         conn.commit()
