@@ -201,6 +201,28 @@ class VisionProcessor:
             # 出错时默认有运动，避免误跳帧
             return True, 100.0
 
+    def _should_skip_inference(
+        self,
+        prev_frame_gray: Optional[np.ndarray],
+        curr_frame: np.ndarray,
+        ts: float,
+        last_forced_ts: float,
+    ) -> bool:
+        """
+        判定当前帧是否可以跳过 YOLO 推理（静止画面复用上一帧结果）。
+
+        仅当距上次强制推理不足 motion_min_interval 秒时才允许跳过，
+        保证长时间静止场景也会周期性强制推理，防止状态漂移。
+        """
+        if not self.motion_detection:
+            return False
+        if prev_frame_gray is None:
+            return False
+        if ts - last_forced_ts >= self.motion_min_interval:
+            return False  # 达到最小强制间隔，必须推理
+        has_motion, _ = self._detect_motion(prev_frame_gray, curr_frame)
+        return not has_motion
+
     def process_video(self, video_path: str, title: str, audio_context: str = "", subtitle_segments: List[Dict] = None) -> Dict:
         """处理视频 - 全面分析模式"""
         duration = get_video_duration(video_path)
@@ -546,6 +568,7 @@ class VisionProcessor:
         timeline = []
         prev_frame_gray = None
         prev_result = None
+        last_forced_timestamp = -float('inf')
 
         for i, (ts, frame_path) in enumerate(zip(timestamps, extracted_paths)):
             if frame_path is None:
@@ -558,11 +581,7 @@ class VisionProcessor:
             frames.append(frame_path)
             decoded.append(frame)
 
-            should_skip = False
-            if self.motion_detection and prev_frame_gray is not None:
-                has_motion, _ = self._detect_motion(prev_frame_gray, frame)
-                if not has_motion:
-                    should_skip = True
+            should_skip = self._should_skip_inference(prev_frame_gray, frame, ts, last_forced_timestamp)
 
             if should_skip and prev_result is not None:
                 entry = prev_result.copy()
@@ -591,6 +610,7 @@ class VisionProcessor:
                 }
                 timeline.append(entry)
                 prev_result = entry
+                last_forced_timestamp = ts
 
             prev_frame_gray = frame if len(frame.shape) == 2 else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
@@ -742,20 +762,10 @@ class VisionProcessor:
             logger.debug(f"[DEBUG] 帧{i}: 解码完成，开始YOLO推理")
 
             # 运动检测：判断是否可以跳过YOLO推理
-            should_skip = False
-            if self.motion_detection and prev_frame_gray is not None:
-                # 计算距离上次强制推理的时间
-                time_since_forced = ts - last_forced_timestamp
-                
-                # 如果距离上次强制推理时间足够长，不跳过（防止长时间静止后场景跳变）
-                if time_since_forced < self.motion_min_interval:
-                    has_motion, change_ratio = self._detect_motion(
-                        prev_frame_gray, frame
-                    )
-                    if not has_motion:
-                        should_skip = True
-                        motion_skipped_count += 1
-                        logger.debug(f"帧{i}: 静止画面 (变化={change_ratio:.2f}%), 跳过YOLO推理")
+            should_skip = self._should_skip_inference(prev_frame_gray, frame, ts, last_forced_timestamp)
+            if should_skip:
+                motion_skipped_count += 1
+                logger.debug(f"帧{i}: 静止画面, 跳过YOLO推理")
 
             if should_skip and prev_result is not None:
                 # 复用上一帧结果，更新时间戳和帧路径
