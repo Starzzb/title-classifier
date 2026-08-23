@@ -453,7 +453,7 @@ class CLIPClassifier:
         t_encode = time.perf_counter()
         embeddings = []
         for frame in frames:
-            emb = self._encode_image_array(frame)
+            emb = self._encode_image_array(frame) if frame is not None else None
             embeddings.append(emb)
         encode_time = time.perf_counter() - t_encode
 

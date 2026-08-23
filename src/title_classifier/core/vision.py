@@ -16,8 +16,8 @@ import numpy as np
 
 from ..providers import get_provider_config, get_api_key, call_vision_api
 from ..detectors import YOLODetector, CLIPClassifier
-from ..utils.video import get_video_duration, extract_frame, extract_multiple_frames, detect_keyframes
-from ..utils.image import compress_image, image_to_base64
+from ..utils.video import get_video_duration, extract_multiple_frames, detect_keyframes, extract_frames_cv2
+from ..utils.image import compress_image, image_to_base64, image_array_to_base64
 from ..utils.stats import TagStatistics
 from ..utils.prompt_loader import get_prompt
 
@@ -247,8 +247,10 @@ class VisionProcessor:
             t_clip = time.perf_counter()
             try:
                 all_frames = video_analysis["frames"]
-                frames_for_diff = [cv2.imread(f) for f in all_frames]
-                frames_for_diff = [f for f in frames_for_diff if f is not None]
+                decoded_all = video_analysis.get("decoded_frames", [])
+                # 传完整对齐列表（含 None），保证分数索引 == 帧索引
+                frames_for_diff = list(decoded_all) if decoded_all else \
+                    [cv2.imread(f) for f in all_frames]
                 if frames_for_diff:
                     clip_diff_scores = self.clip_classifier.compute_frame_diff_scores(frames_for_diff)
                     timing["clip_diff"] = time.perf_counter() - t_clip
@@ -313,6 +315,13 @@ class VisionProcessor:
         # 6. 调用VLM（传入音频上下文和每帧字幕）
         frames_for_vlm = [selected_frames[i] for i in selected_indices if i < len(selected_frames)]
         logger.info(f"调用VLM: {len(frames_for_vlm)}帧")
+
+        # 复用内存解码帧（缺失时回退到路径），result/debug 仍保留路径列表
+        decoded_all = video_analysis.get("decoded_frames", [])
+        vlm_input = [
+            decoded_all[i] if i < len(decoded_all) and decoded_all[i] is not None else selected_frames[i]
+            for i in selected_indices
+        ]
         
         # 保存调试数据 - 检测结果
         if debug_subdir:
@@ -327,7 +336,7 @@ class VisionProcessor:
 
         t_vlm = time.perf_counter()
         result = self._call_vlm_comprehensive(
-            frames_for_vlm,
+            vlm_input,
             title,
             comprehensive_context,
             audio_context,
@@ -434,7 +443,7 @@ class VisionProcessor:
 
             t2 = time.perf_counter()
             seg_result = self._call_vlm_comprehensive(
-                seg_analysis["frames_for_vlm"],
+                seg_analysis["decoded"],
                 f"{title}[场景{seg_idx+1}]",
                 seg_analysis["context"],
                 audio_context,
@@ -527,21 +536,27 @@ class VisionProcessor:
         n_frames = min(self.frames_per_scene, max(3, int(duration / 0.5)))
         timestamps = np.linspace(seg_start, seg_end, n_frames)
 
+        # 一次性批量抽帧（单次解码）
+        extracted_paths = extract_frames_cv2(
+            video_path, str(tmp_dir), [float(t) for t in timestamps], max_size=400
+        )
+
         frames = []
+        decoded = []
         timeline = []
         prev_frame_gray = None
         prev_result = None
 
-        for i, ts in enumerate(timestamps):
-            frame_path = str(tmp_dir / f"frame_{i:04d}_{ts:.1f}s.jpg")
-            if not extract_frame(video_path, frame_path, timestamp=str(ts), max_size=400, duration=video_duration):
+        for i, (ts, frame_path) in enumerate(zip(timestamps, extracted_paths)):
+            if frame_path is None:
                 continue
-            frames.append(frame_path)
 
             data = np.fromfile(frame_path, dtype=np.uint8)
             frame = cv2.imdecode(data, cv2.IMREAD_COLOR)
             if frame is None:
                 continue
+            frames.append(frame_path)
+            decoded.append(frame)
 
             should_skip = False
             if self.motion_detection and prev_frame_gray is not None:
@@ -596,6 +611,7 @@ class VisionProcessor:
             "frames_for_vlm": selected_frames,
             "context": context,
             "frames": frames,
+            "decoded": decoded,
             "timeline": timeline,
         }
 
@@ -675,6 +691,7 @@ class VisionProcessor:
         tmp_dir.mkdir(parents=True, exist_ok=True)
         frames = []
         timeline = []
+        decoded_frames = []
 
         # 计算采样时间点
         timestamps = np.arange(0, duration, self.analysis_step)
@@ -698,29 +715,31 @@ class VisionProcessor:
             except Exception as e:
                 logger.warning(f"CUDA预热失败: {e}")
 
+        # 一次性批量抽帧（单次解码，替代循环内逐帧 ffmpeg 子进程）
+        extracted_paths = extract_frames_cv2(
+            video_path, str(tmp_dir), [float(t) for t in timestamps], max_size=400
+        )
+
         # 运动检测相关变量
         prev_frame_gray = None
         prev_result = None
         last_forced_timestamp = -float('inf')  # 上次强制推理的时间戳
         motion_skipped_count = 0
 
-        for i, ts in enumerate(timestamps):
-            # 提取帧
-            frame_path = str(tmp_dir / f"frame_{i:04d}_{ts:.1f}s.jpg")
-            logger.debug(f"[DEBUG] 帧{i}: 开始提取 {ts:.1f}s")
-            if not extract_frame(video_path, frame_path, timestamp=str(ts), max_size=400, duration=duration):
-                logger.debug(f"帧提取失败: {frame_path}")
+        for i, (ts, frame_path) in enumerate(zip(timestamps, extracted_paths)):
+            if frame_path is None:
+                logger.debug(f"帧{i}: 提取失败（跳过）")
                 continue
-            logger.debug(f"[DEBUG] 帧{i}: 提取完成，开始YOLO推理")
 
-            frames.append(frame_path)
-
-            # 读取帧用于运动检测和YOLO分析
+            # 全链路唯一一次解码（CLIP/VLM 均复用该内存数组）
             data = np.fromfile(frame_path, dtype=np.uint8)
             frame = cv2.imdecode(data, cv2.IMREAD_COLOR)
-
             if frame is None:
+                logger.debug(f"帧{i}: 解码失败（跳过）")
                 continue
+            frames.append(frame_path)
+            decoded_frames.append(frame)
+            logger.debug(f"[DEBUG] 帧{i}: 解码完成，开始YOLO推理")
 
             # 运动检测：判断是否可以跳过YOLO推理
             should_skip = False
@@ -852,6 +871,7 @@ class VisionProcessor:
 
         return {
             "frames": frames,
+            "decoded_frames": decoded_frames,
             "timeline": timeline,
             "duration": duration,
         }
@@ -1148,31 +1168,30 @@ class VisionProcessor:
 
         return "\n".join(context_lines)
 
-    def _call_vlm_comprehensive(self, frames: List[str], title: str, context: str, audio_context: str = "", per_frame_subtitle: str = "", diff_hint: str = "") -> Dict:
+    def _to_base64_item(self, item) -> str:
+        """帧元素分派：str 路径读盘编码；ndarray 直接编码"""
+        if isinstance(item, np.ndarray):
+            return image_array_to_base64(item, max_size=self.max_image_size)
+        return image_to_base64(item, max_size=self.max_image_size)
+
+    def _call_vlm_comprehensive(self, frames, title: str, context: str = "", audio_context: str = "", per_frame_subtitle: str = "", diff_hint: str = "") -> Dict:
         """调用VLM - 全面分析模式，失败重试一次"""
         if not frames:
             return {"error": "无可用帧（所有帧提取失败）"}
 
         prompt = self._build_comprehensive_prompt(title, len(frames), context, audio_context, per_frame_subtitle, diff_hint=diff_hint)
 
-        if len(frames) > 1:
-            images_b64 = [image_to_base64(f, max_size=self.max_image_size) for f in frames]
+        images_b64 = [self._to_base64_item(f) for f in frames]
+        result = call_vision_api(
+            self.provider, images_b64, prompt,
+            model=self.model, api_key=self.api_key,
+        )
+
+        # 失败时重试一次（同样帧数）
+        if result.startswith("[ERROR]") or not result.strip():
+            logger.warning(f"VLM调用失败，重试一次: {len(frames)}帧")
             result = call_vision_api(
                 self.provider, images_b64, prompt,
-                model=self.model, api_key=self.api_key,
-            )
-
-            # 失败时重试一次（同样帧数）
-            if result.startswith("[ERROR]") or not result.strip():
-                logger.warning(f"VLM调用失败，重试一次: {len(frames)}帧")
-                result = call_vision_api(
-                    self.provider, images_b64, prompt,
-                    model=self.model, api_key=self.api_key,
-                )
-        else:
-            image_b64 = image_to_base64(frames[0], max_size=self.max_image_size)
-            result = call_vision_api(
-                self.provider, image_b64, prompt,
                 model=self.model, api_key=self.api_key,
             )
 
@@ -1197,10 +1216,7 @@ class VisionProcessor:
                 f"{get_prompt('vision_retry_video', 'output_format')}"
             )
 
-            if len(frames) > 1:
-                images_b64_retry = [image_to_base64(f, max_size=self.max_image_size) for f in frames[:5]]
-            else:
-                images_b64_retry = [image_to_base64(frames[0], max_size=self.max_image_size)]
+            images_b64_retry = [self._to_base64_item(f) for f in frames[:5]]
 
             result_retry = call_vision_api(
                 self.provider, images_b64_retry, retry_prompt,
