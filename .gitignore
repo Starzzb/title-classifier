@@ -11,6 +11,9 @@ _vision_tmp/
 *.egg-info/
 uv.lock
 
+# Git worktrees
+.worktrees/
+
 # 测试媒体文件
 test/
 tests/test_audio.py
