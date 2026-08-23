@@ -4,7 +4,7 @@ import subprocess
 import logging
 import sys
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -531,3 +531,84 @@ def detect_keyframes(
 
     logger.info(f"检测到 {len(keyframe_paths)} 个关键帧")
     return keyframe_paths
+
+
+def extract_frames_cv2(
+    video_path: str,
+    output_dir: str,
+    timestamps: List[float],
+    max_size: int = 400,
+    quality: int = 90,
+) -> List[Optional[str]]:
+    """
+    用 cv2 单次顺序解码批量提取帧（grab 跳帧 + retrieve 仅解码目标帧），
+    替代逐帧 ffmpeg 子进程。
+
+    Args:
+        video_path: 视频路径
+        output_dir: 输出目录
+        timestamps: 目标时间戳（秒）列表
+        max_size: 输出图片最长边
+        quality: JPEG 质量
+
+    Returns:
+        与 timestamps 对齐的路径列表；失败位置为 None。
+        文件名: frame_{i:04d}_{ts:.1f}s.jpg（i 为 timestamps 下标）
+    """
+    if not timestamps:
+        return []
+
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    def _save(idx: int, ts: float, frame: np.ndarray) -> str:
+        h, w = frame.shape[:2]
+        if max(h, w) > max_size:
+            scale = max_size / max(h, w)
+            frame = cv2.resize(
+                frame,
+                (max(2, int(w * scale)) // 2 * 2, max(2, int(h * scale)) // 2 * 2),
+                interpolation=cv2.INTER_AREA,
+            )
+        path = out_dir / f"frame_{idx:04d}_{ts:.1f}s.jpg"
+        cv2.imwrite(str(path), frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
+        return str(path)
+
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        logger.warning(f"无法打开视频: {video_path}")
+        return [None] * len(timestamps)
+
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    if fps <= 0 or total <= 0:
+        cap.release()
+        logger.warning(f"视频元数据无效，无法批量抽帧: {video_path}")
+        return [None] * len(timestamps)
+
+    # 目标帧索引 → 时间戳下标列表（多个时间戳可能落在同一帧）
+    target_map: Dict[int, List[int]] = {}
+    for i, ts in enumerate(timestamps):
+        idx = min(max(int(round(ts * fps)), 0), total - 1)
+        target_map.setdefault(idx, []).append(i)
+
+    results: List[Optional[str]] = [None] * len(timestamps)
+    frame_idx = -1
+    while frame_idx < total - 1 and target_map:
+        if not cap.grab():  # 快速跳过，不解码
+            break
+        frame_idx += 1
+        if frame_idx not in target_map:
+            continue
+        ok, frame = cap.retrieve()  # 仅对目标帧解码
+        wanted = target_map.pop(frame_idx)
+        if not ok or frame is None:
+            continue
+        for i in wanted:
+            results[i] = _save(i, timestamps[i], frame)
+
+    cap.release()
+
+    got = sum(1 for r in results if r is not None)
+    logger.info(f"cv2批量抽帧: {got}/{len(timestamps)} 帧 ({video_path})")
+    return results
