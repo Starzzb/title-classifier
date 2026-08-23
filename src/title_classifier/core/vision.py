@@ -765,7 +765,6 @@ class VisionProcessor:
             should_skip = self._should_skip_inference(prev_frame_gray, frame, ts, last_forced_timestamp)
             if should_skip:
                 motion_skipped_count += 1
-                logger.debug(f"帧{i}: 静止画面, 跳过YOLO推理")
 
             if should_skip and prev_result is not None:
                 # 复用上一帧结果，更新时间戳和帧路径
