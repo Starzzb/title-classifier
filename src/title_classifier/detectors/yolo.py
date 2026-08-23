@@ -560,14 +560,6 @@ class YOLODetector(BaseDetector):
                 model_timing["segment"] = 0
                 logger.warning(f"segment模型推理失败: {e}")
 
-        # CUDA显存清理
-        if self.device == "cuda":
-            try:
-                import torch
-                torch.cuda.empty_cache()
-            except Exception:
-                pass
-
         # 合并结果
         results["merged"] = self._merge_results(
             results["detection"],
