@@ -211,6 +211,7 @@ class StageRenameTab(ttk.Frame):
                         original_title=row.get("original_title", ""),
                         file_size=file_size,
                         duration=duration,
+                        path=original_path,
                     )
                     if existing:
                         continue
