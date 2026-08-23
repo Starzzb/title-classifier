@@ -4,7 +4,7 @@ import logging
 import shutil
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any
 
 import cv2
 import numpy as np
@@ -1004,84 +1004,3 @@ def draw_comprehensive_on_frame(frame: np.ndarray, comprehensive_result: Dict) -
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
     
     return annotated
-
-
-# 保持向后兼容
-def detect_human_yolo(frame_path: str, model_type: str = "pose", conf_threshold: float = 0.5) -> Dict:
-    """检测人体（向后兼容）"""
-    detector = YOLODetector(model_types=[model_type], confidence=conf_threshold)
-    return detector.detect_from_file(frame_path)
-
-
-def find_human_frame_yolo(
-    video_path: str,
-    model_type: str = "pose",
-    step_seconds: float = 5.0,
-    max_retries: int = 3,
-    conf_threshold: float = 0.5,
-) -> Dict:
-    """从视频中找到有人体的帧（向后兼容）"""
-    import subprocess
-    import hashlib
-
-    detector = YOLODetector(model_types=[model_type], confidence=conf_threshold)
-
-    # 获取视频时长
-    try:
-        result = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-             "-of", "default=noprint_wrappers=1:nokey=1", video_path],
-            capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace",
-        )
-        duration = float(result.stdout.strip()) if result.returncode == 0 else 0.0
-    except:
-        duration = 0.0
-
-    if duration <= 0:
-        return {"found": False, "frame_path": None, "timestamp": None, "max_confidence": 0.0, "detections": [], "attempts": 0}
-
-    tmp_dir = Path("logs/_yolo_frame_selector_tmp")
-    tmp_dir.mkdir(parents=True, exist_ok=True)
-    video_hash = hashlib.md5(video_path.encode()).hexdigest()[:8]
-
-    for attempt in range(max_retries):
-        timestamp = attempt * step_seconds
-        frame_path = str(tmp_dir / f"frame_{video_hash}_{attempt}.jpg")
-
-        hours = int(timestamp // 3600)
-        minutes = int((timestamp % 3600) // 60)
-        seconds = timestamp % 60
-        timestamp_str = f"{hours:02d}:{minutes:02d}:{seconds:06.3f}"
-
-        try:
-            result = subprocess.run(
-                ["ffmpeg", "-y", "-ss", timestamp_str, "-i", video_path,
-                 "-frames:v", "1", "-q:v", "2", frame_path],
-                capture_output=True, timeout=15, encoding="utf-8", errors="replace",
-            )
-
-            if result.returncode != 0 or not Path(frame_path).exists():
-                continue
-
-            det_result = detector.detect_from_file(frame_path)
-
-            if det_result["has_person"]:
-                return {
-                    "found": True,
-                    "frame_path": frame_path,
-                    "timestamp": timestamp,
-                    "max_confidence": det_result["max_confidence"],
-                    "detections": det_result["persons"],
-                    "attempts": attempt + 1,
-                }
-
-            try:
-                Path(frame_path).unlink()
-            except:
-                pass
-
-        except Exception as e:
-            logger.error(f"帧提取失败: {e}")
-            continue
-
-    return {"found": False, "frame_path": None, "timestamp": None, "max_confidence": 0.0, "detections": [], "attempts": max_retries}
