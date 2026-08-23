@@ -551,12 +551,14 @@ class YOLODetector(BaseDetector):
                 model_timing["pose"] = 0
                 logger.warning(f"pose模型推理失败: {e}")
 
-        # 早退：detect 与 pose 都运行且均为阴性 → 投票不可能≥2，跳过 segment
+        # 早退：detect 与 pose 都实际运行且均为阴性 → 投票不可能≥2，跳过 segment
         skip_segment = (
             "segment" in self._models
             and "detect" in self._models and "pose" in self._models
-            and not (detect_result or {}).get("has_person", False)
-            and not (pose_result or {}).get("has_person", False)
+            and detect_result is not None
+            and pose_result is not None
+            and not detect_result.get("has_person", False)
+            and not pose_result.get("has_person", False)
         )
         if skip_segment:
             logger.debug("detect与pose均未检出人体，跳过segment推理")

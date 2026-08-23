@@ -270,7 +270,7 @@ class VisionProcessor:
             try:
                 all_frames = video_analysis["frames"]
                 decoded_all = video_analysis.get("decoded_frames", [])
-                # 传完整对齐列表（含 None），保证分数索引 == 帧索引
+                # 复用解码帧数组（与 frames 严格对齐），保证分数索引 == 帧索引
                 frames_for_diff = list(decoded_all) if decoded_all else \
                     [cv2.imread(f) for f in all_frames]
                 if frames_for_diff:
@@ -608,6 +608,10 @@ class VisionProcessor:
                     "confidence": result.get("confidence", 0),
                     "motion_skipped": False,
                 }
+                entry["raw_detection"] = result.get("detection")
+                entry["raw_pose"] = result.get("pose")
+                entry["raw_segment"] = result.get("segment")
+                entry["merged"] = result.get("merged")
                 timeline.append(entry)
                 prev_result = entry
                 last_forced_timestamp = ts
