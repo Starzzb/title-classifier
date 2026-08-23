@@ -1086,7 +1086,6 @@ class VisionProcessor:
             context_lines.append("【视频全面分析结果】")
             context_lines.append(f"- 视频时长: {video_summary.get('duration', 0):.1f}秒")
             context_lines.append(f"- 人体出现比例: {video_summary.get('person_ratio', 0) * 100:.1f}%")
-            context_lines.append(f"- 主要姿态: {', '.join(video_summary.get('main_pose', ['未知']))}")
             
             # 多模型信息
             models_used = video_summary.get("models_used", [])
