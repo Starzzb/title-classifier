@@ -1259,13 +1259,12 @@ class VisionProcessor:
             original_dest = detection_dir / f"{stem}_original.jpg"
             shutil.copy2(frame_path, original_dest)
 
-            # 绘制检测结果并保存
+            # 绘制检测结果并保存（复用缓存推理结果，不重新推理）
             try:
                 data = np.fromfile(frame_path, dtype=np.uint8)
                 frame = cv2.imdecode(data, cv2.IMREAD_COLOR)
-                if frame is not None:
-                    # 始终使用YOLO绘制姿态
-                    pose_result = self.yolo_detector.estimate_pose(frame)
+                pose_result = entry.get("raw_pose")
+                if frame is not None and pose_result is not None:
                     from ..detectors.yolo import draw_pose_on_frame
                     annotated = draw_pose_on_frame(frame, pose_result)
 
