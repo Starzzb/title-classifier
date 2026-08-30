@@ -119,6 +119,7 @@ class Scanner:
         append: bool = False,
         exclude_dirs: List[str] = None,
         force_reclassify: bool = False,
+        exclude_images: bool = False,
     ) -> str:
         """
         扫描目录或单个文件并生成待审表
@@ -129,6 +130,7 @@ class Scanner:
             append: 是否追加模式
             exclude_dirs: 排除的目录列表
             force_reclassify: 是否强制重新分类
+            exclude_images: 是否排除图片文件（仅处理视频）
 
         Returns:
             输出文件路径
@@ -151,6 +153,9 @@ class Scanner:
         # 判断是单个文件还是目录
         if target_path.is_file():
             logger.info(f"处理单个文件: {target_path}")
+            if exclude_images and target_path.suffix.lower() in IMAGE_EXTENSIONS:
+                logger.warning(f"已启用排除图片，跳过图片文件: {target_path}")
+                return ""
             if _is_thumbnail(target_path):
                 logger.info(f"跳过缩略图: {target_path}")
                 return ""
@@ -160,7 +165,7 @@ class Scanner:
                 return ""
         else:
             logger.info(f"开始递归扫描: {target_path}")
-            files = self._scan_directory(target_path, exclude_dirs or [])
+            files = self._scan_directory(target_path, exclude_dirs or [], exclude_images=exclude_images)
         
         logger.info(f"找到 {len(files)} 个媒体文件")
 
@@ -235,12 +240,15 @@ class Scanner:
         if keywords and media_id:
             db.add_tags_from_keywords(media_id, keywords, "scanner")
 
-    def sync_db(self, target_dir: str, exclude_dirs: list = None):
+    def sync_db(self, target_dir: str, exclude_dirs: list = None, deep: bool = False,
+                exclude_images: bool = False):
         """扫描目录，将所有文件信息同步到数据库
 
         Args:
             target_dir: 目标目录
             exclude_dirs: 排除的目录列表
+            deep: 强制全量探测（跳过「路径+大小一致即视为未变化」快速路径）
+            exclude_images: 为 True 时排除图片文件，仅扫描/同步视频
         """
         if not self.db_store:
             logger.error("未配置数据库连接，无法同步")
@@ -255,14 +263,32 @@ class Scanner:
             logger.error("sync_db 模式仅支持目录扫描")
             return
 
-        logger.info(f"开始同步数据库: {target_path}")
-        files = self._scan_directory(target_path, exclude_dirs or [])
+        logger.info(f"开始同步数据库: {target_path}" + ("（deep 全量探测）" if deep else "")
+                    + ("（排除图片）" if exclude_images else ""))
+        files = self._scan_directory(target_path, exclude_dirs or [], exclude_images=exclude_images)
         logger.info(f"找到 {len(files)} 个媒体文件，开始同步...")
 
         updated = 0
         inserted = 0
         skipped = 0
         deleted = 0
+        fast_hits = 0
+        pending = 0  # 未提交的写操作数
+        COMMIT_EVERY = 200
+
+        def maybe_commit(force: bool = False):
+            nonlocal pending
+            if pending > 0 and (force or pending >= COMMIT_EVERY):
+                self.db_store.conn.commit()
+                pending = 0
+
+        def _restore_status(row: dict) -> str:
+            """文件重新出现时，从「文件已移走」恢复审核状态"""
+            if row.get("vision_description") or row.get("vision_keywords"):
+                return "已完成"
+            if is_already_classified(row.get("final_name", "")):
+                return "已规范化"
+            return "已规范化" if classified else "待确认"
 
         for file_path in files:
             name = file_path.stem
@@ -276,6 +302,26 @@ class Scanner:
                 file_size = file_path.stat().st_size
             except OSError:
                 pass
+
+            # 快速路径：库中已有 current_path + file_size 完全一致的记录，
+            # 视为未变化，跳过 ffprobe/cv2/哈希等重探测（--deep 时关闭）。
+            if not deep and file_size:
+                unchanged = self.db_store.find_unchanged(str(file_path), file_size)
+                if unchanged:
+                    fast_hits += 1
+                    if unchanged.get("review_status") == "文件已移走":
+                        new_status = _restore_status(unchanged)
+                        self.db_store.update_media(
+                            unchanged["id"], "review_status", new_status,
+                            "sync_db", commit=False,
+                        )
+                        pending += 1
+                        updated += 1
+                        logger.info(f"[恢复] 文件已移走 → {new_status}: {clean_title}")
+                    else:
+                        skipped += 1
+                    maybe_commit()
+                    continue
 
             duration = None
             resolution = ""
@@ -298,8 +344,10 @@ class Scanner:
                         "final_name": clean_name,
                         "review_status": "文件损毁已删除",
                     }
-                    self.db_store.insert_media(data)
+                    self.db_store.insert_media(data, skip_match=False, commit=False)
+                    pending += 1
                     deleted += 1
+                    maybe_commit()
                     continue
 
             elif file_path.suffix.lower() in IMAGE_EXTENSIONS:
@@ -332,61 +380,65 @@ class Scanner:
                 resolution=resolution,
                 path=str(file_path),
                 file_hash=file_hash,
+                commit=False,
             )
 
             if existing:
                 changed = False
+                updates = {}
 
                 # 如果之前标记为"文件已移走"，恢复状态
                 if existing.get("review_status") == "文件已移走":
-                    if existing.get("vision_description") or existing.get("vision_keywords"):
-                        new_status = "已完成"
-                    elif is_already_classified(existing.get("final_name", "")):
-                        new_status = "已规范化"
-                    else:
-                        new_status = data["review_status"]
-                    self.db_store.update_media(existing["id"], "review_status", new_status, "sync_db")
+                    new_status = _restore_status(existing)
+                    updates["review_status"] = new_status
                     logger.info(f"[恢复] 文件已移走 → {new_status}: {clean_title}")
-                    changed = True
 
-                # 更新路径
+                # 更新路径 / 补全缺失元数据
                 for field in ["original_path", "current_path"]:
                     new_val = data.get(field)
-                    old_val = existing.get(field)
-                    if new_val and new_val != old_val:
-                        self.db_store.update_media(existing["id"], field, new_val, "sync_db")
-                        changed = True
-
-                # 补全缺失元数据
+                    if new_val and new_val != existing.get(field):
+                        updates[field] = new_val
                 for field in ["file_size", "duration", "resolution"]:
                     new_val = data.get(field)
-                    old_val = existing.get(field)
-                    if new_val and not old_val:
-                        self.db_store.update_media(existing["id"], field, new_val, "sync_db")
+                    if new_val and not existing.get(field):
+                        updates[field] = new_val
+
+                if updates:
+                    if self.db_store.update_media_fields(existing["id"], updates, "sync_db", commit=False):
                         changed = True
+                        pending += 1
 
                 # 关联指纹（L2/L3 命中时补上 fingerprint_id）
                 if file_hash and not existing.get("fingerprint_id"):
-                    fp_id = self.db_store.get_fingerprint_id(file_size, duration, file_hash)
-                    self.db_store.link_fingerprint(existing["id"], fp_id)
+                    fp_id = self.db_store.get_fingerprint_id(file_size, duration, file_hash, commit=False)
+                    self.db_store.link_fingerprint(existing["id"], fp_id, commit=False)
+                    changed = True
+                    pending += 1
 
                 if changed:
                     updated += 1
                 else:
                     skipped += 1
             else:
-                # 新建记录并关联指纹
+                # 新建记录并关联指纹（find_match 已确认无匹配，skip_match 去重调用）
                 fp_id = None
                 if file_size and duration:
-                    fp_id = self.db_store.get_fingerprint_id(file_size, duration, file_hash)
+                    fp_id = self.db_store.get_fingerprint_id(file_size, duration, file_hash, commit=False)
                 if fp_id:
                     data["fingerprint_id"] = fp_id
                 if file_hash:
                     data["file_hash"] = file_hash
-                self.db_store.insert_media(data)
+                self.db_store.insert_media(data, skip_match=True, commit=False)
+                pending += 1
                 inserted += 1
 
-        logger.info(f"[完成] 数据库同步: 新增 {inserted}, 更新 {updated}, 无变化 {skipped}, 删除损毁 {deleted}")
+            maybe_commit()
+
+        maybe_commit(force=True)
+        logger.info(
+            f"[完成] 数据库同步: 新增 {inserted}, 更新 {updated}, 无变化 {skipped}, 删除损毁 {deleted}"
+            + (f"，快速路径命中 {fast_hits}" if fast_hits else "")
+        )
 
         # 标记磁盘上已不存在的记录为"文件已移走"
         moved = 0
@@ -500,8 +552,12 @@ class Scanner:
         self._save_csv(csv_rows, output_file, append=False)
         logger.info(f"[待视觉识别] 发现 {len(csv_rows)} 条记录缺少视觉描述，已生成 CSV: {output_file}")
 
-    def _scan_directory(self, directory: Path, exclude_dirs: List[str]) -> List[Path]:
-        """递归扫描目录"""
+    def _scan_directory(self, directory: Path, exclude_dirs: List[str], exclude_images: bool = False) -> List[Path]:
+        """递归扫描目录
+
+        Args:
+            exclude_images: 为 True 时跳过图片文件，仅收集视频
+        """
         files = []
         exclude_set = set(exclude_dirs)
 
@@ -512,6 +568,8 @@ class Scanner:
                 continue
 
             if item.is_file() and item.suffix.lower() in MEDIA_EXTENSIONS:
+                if exclude_images and item.suffix.lower() in IMAGE_EXTENSIONS:
+                    continue
                 if _is_thumbnail(item):
                     continue
                 files.append(item)

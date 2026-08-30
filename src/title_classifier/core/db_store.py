@@ -42,6 +42,9 @@ class MediaDB:
         self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
+        # WAL + NORMAL：提交不再逐次 fsync，大幅减少 sync 循环的 IO 等待；
+        # 崩溃安全性由 WAL 保证，最多丢最近一次断电前的提交，不会损坏库文件。
+        self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.execute("PRAGMA foreign_keys=ON")
 
     def init_schema(self):
@@ -154,20 +157,28 @@ class MediaDB:
 
     # ===== 基础 CRUD =====
 
-    def insert_media(self, data: dict) -> int:
-        """插入新记录，返回 media_id。如果匹配到已有记录则更新路径并返回旧 id"""
-        existing = self.find_match(
-            original_title=data.get("original_title", ""),
-            file_size=data.get("file_size"),
-            duration=data.get("duration"),
-            resolution=data.get("resolution"),
-            path=data.get("original_path") or data.get("current_path"),
-            file_hash=data.get("file_hash"),  # 调用方已算好则用于严格确认
-        )
+    def insert_media(self, data: dict, skip_match: bool = False, commit: bool = True) -> int:
+        """插入新记录，返回 media_id。如果匹配到已有记录则更新路径并返回旧 id
+
+        Args:
+            skip_match: 调用方已做过 find_match 且未命中时传 True，避免重复匹配
+            commit: 批量同步场景可传 False，由调用方分块提交
+        """
+        existing = None
+        if not skip_match:
+            existing = self.find_match(
+                original_title=data.get("original_title", ""),
+                file_size=data.get("file_size"),
+                duration=data.get("duration"),
+                resolution=data.get("resolution"),
+                path=data.get("original_path") or data.get("current_path"),
+                file_hash=data.get("file_hash"),  # 调用方已算好则用于严格确认
+                commit=commit,
+            )
 
         # 未命中：尝试内容指纹消歧
         file_hash = data.get("file_hash")
-        if not existing and not file_hash and data.get("file_size") and data.get("duration"):
+        if not existing and not skip_match and not file_hash and data.get("file_size") and data.get("duration"):
             from ..utils.fingerprint import compute_partial_hash
             src = data.get("original_path") or data.get("current_path")
             if src:
@@ -179,26 +190,27 @@ class MediaDB:
                         duration=data.get("duration"),
                         resolution=data.get("resolution"),
                         file_hash=file_hash,
+                        commit=commit,
                     )
 
         if existing:
             # 匹配到已有记录，更新路径
             new_path = data.get("original_path", "")
             if new_path and new_path != existing.get("original_path"):
-                self.update_media(existing["id"], "original_path", new_path, "match_update")
+                self.update_media(existing["id"], "original_path", new_path, "match_update", commit=commit)
             current_path = data.get("current_path", new_path)
             if current_path and current_path != existing.get("current_path"):
-                self.update_media(existing["id"], "current_path", current_path, "match_update")
+                self.update_media(existing["id"], "current_path", current_path, "match_update", commit=commit)
             # 关联指纹
             if file_hash and not existing.get("fingerprint_id") and data.get("duration"):
-                fp_id = self.get_fingerprint_id(data["file_size"], data["duration"], file_hash)
-                self.link_fingerprint(existing["id"], fp_id)
+                fp_id = self.get_fingerprint_id(data["file_size"], data["duration"], file_hash, commit=commit)
+                self.link_fingerprint(existing["id"], fp_id, commit=commit)
             return existing["id"]
 
         # 新建记录：关联指纹
         fp_id = data.get("fingerprint_id")
         if not fp_id and file_hash and data.get("duration"):
-            fp_id = self.get_fingerprint_id(data["file_size"], data["duration"], file_hash)
+            fp_id = self.get_fingerprint_id(data["file_size"], data["duration"], file_hash, commit=commit)
 
         cursor = self.conn.execute("""
             INSERT INTO media_files
@@ -225,12 +237,13 @@ class MediaDB:
             data.get("srt_path"),
             fp_id,
         ))
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
         media_id = cursor.lastrowid
         logger.debug(f"插入记录: id={media_id}, path={data.get('original_path')}")
         return media_id
 
-    def update_media(self, media_id: int, field: str, value: any, source: str = ""):
+    def update_media(self, media_id: int, field: str, value: any, source: str = "", commit: bool = True):
         """更新字段并记录改动"""
         current = self.conn.execute(
             f"SELECT {field} FROM media_files WHERE id=?", (media_id,)
@@ -238,13 +251,58 @@ class MediaDB:
 
         if current and str(current[0]) != str(value):
             old_value = str(current[0]) if current[0] is not None else ""
-            self.log_change(media_id, field, old_value, str(value), source)
+            self.log_change(media_id, field, old_value, str(value), source, commit=False)
 
         self.conn.execute(
             f"UPDATE media_files SET {field}=?, updated_at=datetime('now','localtime') WHERE id=?",
             (value, media_id)
         )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
+
+    def update_media_fields(self, media_id: int, fields: dict, source: str = "", commit: bool = True) -> bool:
+        """批量更新多个字段（单条 UPDATE）并逐字段记录改动。
+
+        Returns: 是否有字段实际发生变化
+        """
+        if not fields:
+            return False
+        field_list = list(fields.keys())
+        current = self.conn.execute(
+            f"SELECT {', '.join(field_list)} FROM media_files WHERE id=?", (media_id,)
+        ).fetchone()
+        if not current:
+            return False
+
+        changed = {}
+        for field in field_list:
+            value = fields[field]
+            if str(current[field]) != str(value):
+                old_value = str(current[field]) if current[field] is not None else ""
+                self.log_change(media_id, field, old_value, str(value), source, commit=False)
+                changed[field] = value
+
+        if changed:
+            sets = ", ".join(f"{f}=?" for f in changed)
+            params = list(changed.values()) + [media_id]
+            self.conn.execute(
+                f"UPDATE media_files SET {sets}, updated_at=datetime('now','localtime') WHERE id=?",
+                params,
+            )
+        if commit:
+            self.conn.commit()
+        return bool(changed)
+
+    def find_unchanged(self, path: str, file_size: int) -> Optional[dict]:
+        """快速路径查询：current_path 与 file_size 均严格一致即视为未变化。
+
+        供 sync_db 在 --deep 之外跳过 ffprobe/cv2/哈希等重探测。
+        """
+        row = self.conn.execute(
+            "SELECT * FROM media_files WHERE current_path=? AND file_size=?",
+            (path, file_size),
+        ).fetchone()
+        return dict(row) if row else None
 
     def get_media(self, media_id: int) -> Optional[dict]:
         """获取单条记录"""
@@ -266,7 +324,8 @@ class MediaDB:
         return dict(row) if row else None
 
     def find_match(self, original_title: str, file_size: int = None, duration: float = None,
-                   resolution: str = None, path: str = None, file_hash: str = None) -> Optional[dict]:
+                   resolution: str = None, path: str = None, file_hash: str = None,
+                   commit: bool = True) -> Optional[dict]:
         """
         匹配确认流程：从宽松到严密，逐级确认两个视频确实是同一个。
 
@@ -358,13 +417,16 @@ class MediaDB:
             if row:
                 candidates[row["id"]] = dict(row)
 
-        # C2 粗指纹候选
+        # C2 粗指纹候选（范围查询，可走 idx_fingerprint_size_dur 索引；
+        # 边界略放宽，宽松收集后由 _confirm 严格复核）
         if file_size and duration:
+            size_lo = int(file_size * (1 - 0.001))
+            size_hi = int(file_size * (1 + 0.001)) + 1
             fps = self.conn.execute(
                 """SELECT * FROM video_fingerprints
-                   WHERE ABS(file_size - ?) / MAX(file_size, 1) <= 0.001
-                     AND ABS(duration - ?) <= 0.5""",
-                (file_size, duration),
+                   WHERE file_size BETWEEN ? AND ?
+                     AND duration BETWEEN ? AND ?""",
+                (size_lo, size_hi, duration - 0.5, duration + 0.5),
             ).fetchall()
             for fp in fps:
                 media = self.conn.execute(
@@ -385,13 +447,18 @@ class MediaDB:
                 if media:
                     candidates.setdefault(media["id"], dict(media))
 
-        # C4 标题候选
+        # C4 标题候选（走 idx_media_original_title 索引：
+        # 精确命中 ∪ '[' 开头范围（BINARY 排序下 '[' 到 '\\' 之间），
+        # 替代原先 LIKE '[%]%' 的全表扫描，再由 Python 剥前缀精确比对）
         stripped = strip_bracket_prefix(original_title or "")
         if stripped:
-            for c in self.conn.execute(
-                "SELECT * FROM media_files WHERE original_title = ? OR original_title LIKE ?",
-                (stripped, "[%]%"),
-            ).fetchall():
+            rows = self.conn.execute(
+                """SELECT * FROM media_files
+                   WHERE original_title = ?
+                      OR (original_title >= ? AND original_title < ?)""",
+                (stripped, "[", "\\"),
+            ).fetchall()
+            for c in rows:
                 if strip_bracket_prefix(c["original_title"]) == stripped:
                     candidates.setdefault(c["id"], dict(c))
 
@@ -407,7 +474,7 @@ class MediaDB:
         if best:
             fp_id = best.get("fingerprint_id")
             if fp_id:
-                self.update_fingerprint_last_seen(fp_id)
+                self.update_fingerprint_last_seen(fp_id, commit=commit)
             return best
         return None
 
@@ -442,16 +509,17 @@ class MediaDB:
         ).fetchone()
         return dict(row) if row else None
 
-    def create_fingerprint(self, file_size: int, duration: float, file_hash: str = None) -> int:
+    def create_fingerprint(self, file_size: int, duration: float, file_hash: str = None, commit: bool = True) -> int:
         """创建指纹"""
         cursor = self.conn.execute(
             "INSERT INTO video_fingerprints (file_size, duration, file_hash) VALUES (?, ?, ?)",
             (file_size, duration, file_hash)
         )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
         return cursor.lastrowid
 
-    def link_fingerprint(self, media_id: int, fp_id: int):
+    def link_fingerprint(self, media_id: int, fp_id: int, commit: bool = True):
         """将 media_files 记录关联到指纹"""
         if not fp_id:
             return
@@ -459,17 +527,19 @@ class MediaDB:
             "UPDATE media_files SET fingerprint_id=? WHERE id=?",
             (fp_id, media_id)
         )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
 
-    def update_fingerprint_last_seen(self, fp_id: int):
+    def update_fingerprint_last_seen(self, fp_id: int, commit: bool = True):
         """更新指纹的最后访问时间"""
         self.conn.execute(
             "UPDATE video_fingerprints SET last_seen=datetime('now','localtime') WHERE id=?",
             (fp_id,)
         )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
 
-    def get_fingerprint_id(self, file_size: int, duration: float, file_hash: str = None) -> int:
+    def get_fingerprint_id(self, file_size: int, duration: float, file_hash: str = None, commit: bool = True) -> int:
         """获取或创建指纹 ID。
 
         优先按 file_hash 精确匹配；无 file_hash 时按 size+duration 唯一候选匹配；
@@ -478,15 +548,15 @@ class MediaDB:
         if file_hash:
             fp = self.find_fingerprint_by_hash(file_hash)
             if fp:
-                self.update_fingerprint_last_seen(fp["id"])
+                self.update_fingerprint_last_seen(fp["id"], commit=commit)
                 return fp["id"]
 
         candidates = self.find_fingerprint(file_size, duration)
         if not file_hash and len(candidates) == 1:
-            self.update_fingerprint_last_seen(candidates[0]["id"])
+            self.update_fingerprint_last_seen(candidates[0]["id"], commit=commit)
             return candidates[0]["id"]
 
-        return self.create_fingerprint(file_size, duration, file_hash)
+        return self.create_fingerprint(file_size, duration, file_hash, commit=commit)
 
     # ===== 标签 =====
 
@@ -551,13 +621,14 @@ class MediaDB:
 
     # ===== 改动记录 =====
 
-    def log_change(self, media_id: int, field_name: str, old_value: str, new_value: str, source: str = ""):
+    def log_change(self, media_id: int, field_name: str, old_value: str, new_value: str, source: str = "", commit: bool = True):
         """记录改动"""
         self.conn.execute("""
             INSERT INTO change_log (media_id, field_name, old_value, new_value, change_source)
             VALUES (?, ?, ?, ?, ?)
         """, (media_id, field_name, old_value, new_value, source))
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
 
     def get_changes(self, media_id: int) -> List[dict]:
         """获取媒体的所有改动历史"""

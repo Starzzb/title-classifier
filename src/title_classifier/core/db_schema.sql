@@ -87,6 +87,7 @@ CREATE TABLE IF NOT EXISTS vlm_frames (
 -- 索引
 CREATE INDEX IF NOT EXISTS idx_media_original_path ON media_files(original_path);
 CREATE INDEX IF NOT EXISTS idx_media_current_path ON media_files(current_path);
+CREATE INDEX IF NOT EXISTS idx_media_original_title ON media_files(original_title);
 CREATE INDEX IF NOT EXISTS idx_media_final_name ON media_files(final_name);
 CREATE INDEX IF NOT EXISTS idx_media_file_hash ON media_files(file_hash);
 CREATE INDEX IF NOT EXISTS idx_media_fingerprint ON media_files(fingerprint_id);

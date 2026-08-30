@@ -69,6 +69,11 @@ class StageScanTab(ttk.Frame):
         sync_db_cb.pack(side=tk.LEFT, padx=4)
         ToolTip(sync_db_cb, "扫描文件并同步到数据库，同时生成待视觉识别的CSV")
 
+        self.s1_exclude_images_var = tk.BooleanVar()
+        excl_img_cb = ttk.Checkbutton(opt_frame, text="排除图片", variable=self.s1_exclude_images_var)
+        excl_img_cb.pack(side=tk.LEFT, padx=4)
+        ToolTip(excl_img_cb, "勾选后跳过 jpg/png/webp 等图片文件，仅扫描/同步视频")
+
         # 执行按钮
         btn_frame = ttk.Frame(tab)
         btn_frame.pack(fill=tk.X, padx=4, pady=8)
@@ -118,10 +123,13 @@ class StageScanTab(ttk.Frame):
             return
 
         sync_db = self.s1_sync_db_var.get()
+        excl_img = self.s1_exclude_images_var.get()
 
         # 同步数据库模式：不需要输出路径
         if sync_db:
             cmd = [PYTHON, "-m", "title_classifier", "scan", "-d", dir_path, "--sync-db"]
+            if excl_img:
+                cmd.append("--exclude-images")
 
             def on_complete(returncode=None):
                 if returncode == 0:
@@ -145,6 +153,8 @@ class StageScanTab(ttk.Frame):
             cmd.append("-a")
         if self.s1_force_var.get():
             cmd.append("--force")
+        if excl_img:
+            cmd.append("--exclude-images")
 
         # 扫描完成后同步 CSV 路径到所有标签页 + 同步到数据库
         def on_scan_complete(returncode=None):

@@ -106,7 +106,8 @@ def cmd_scan(args):
 
     if args.sync_db:
         # DB 同步模式：扫描全部文件，同步到数据库，并生成待处理 CSV
-        scanner.sync_db(target_dir=args.dir, exclude_dirs=args.exclude_dir)
+        scanner.sync_db(target_dir=args.dir, exclude_dirs=args.exclude_dir,
+                        deep=args.deep, exclude_images=args.exclude_images)
     else:
         # 普通扫描 / 强制重分类：生成 CSV
         output = scanner.scan(
@@ -115,6 +116,7 @@ def cmd_scan(args):
             append=args.append,
             exclude_dirs=args.exclude_dir,
             force_reclassify=args.force,
+            exclude_images=args.exclude_images,
         )
         if output:
             print(f"[完成] 结果已保存至: {output}")
@@ -718,6 +720,14 @@ def main():
     scan_cmd.add_argument("--exclude-dir", nargs="*", default=[], help="排除的目录")
     scan_cmd.add_argument("--force", action="store_true", help="强制重新分类")
     scan_cmd.add_argument("--sync-db", action="store_true", help="同步数据库并生成待视觉识别CSV")
+    scan_cmd.add_argument(
+        "--deep", action="store_true",
+        help="sync-db 时跳过快速路径，强制对全部文件做 ffprobe/哈希全量探测",
+    )
+    scan_cmd.add_argument(
+        "--exclude-images", action="store_true",
+        help="排除图片文件（jpg/png/webp 等），仅扫描/同步视频",
+    )
     scan_cmd.set_defaults(func=cmd_scan)
 
     # refine 命令
