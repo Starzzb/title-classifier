@@ -65,10 +65,15 @@ python scripts/extract_original.py --all
 | `download_clip.py` | 下载 CLIP 模型 |
 | `import_csv.py` | 从 CSV 导入数据到 SQLite 数据库 |
 | `test_prompts.py` | 测试 AI prompt 效果 |
+| `cleanup_full.py` | media.db 与磁盘双向对齐（以磁盘为准，默认 dry-run，`--execute` 前自动备份） |
 
 ```bash
 python scripts/import_csv.py                           # 导入所有CSV到数据库
 python scripts/import_csv.py --csv "data/output/love/title_review.csv"  # 指定CSV
+
+# 数据库对齐：先 dry-run 看统计，确认后执行
+python scripts/cleanup_full.py
+python scripts/cleanup_full.py --execute
 ```
 
 ## 输出目录
