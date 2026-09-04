@@ -3,6 +3,7 @@
 import sqlite3
 import shutil
 import sys
+import json
 import logging
 from pathlib import Path
 from datetime import datetime
@@ -557,6 +558,35 @@ class MediaDB:
             return candidates[0]["id"]
 
         return self.create_fingerprint(file_size, duration, file_hash, commit=commit)
+
+    # ===== 场景切换点缓存 =====
+
+    def get_scene_cache(self, fingerprint_id: int, threshold: float, sample_interval: float = 0.5) -> Optional[List[float]]:
+        """查询场景切换点缓存，未命中返回 None"""
+        row = self.conn.execute(
+            "SELECT scene_points FROM scene_cache "
+            "WHERE fingerprint_id=? AND threshold=? AND sample_interval=?",
+            (fingerprint_id, threshold, sample_interval),
+        ).fetchone()
+        if not row:
+            return None
+        try:
+            return json.loads(row["scene_points"])
+        except (ValueError, TypeError):
+            return None
+
+    def save_scene_cache(self, fingerprint_id: int, threshold: float, scene_points: List[float],
+                         sample_interval: float = 0.5, commit: bool = True):
+        """写入/覆盖场景切换点缓存"""
+        self.conn.execute(
+            "INSERT INTO scene_cache (fingerprint_id, threshold, sample_interval, scene_points) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(fingerprint_id, threshold, sample_interval) "
+            "DO UPDATE SET scene_points=excluded.scene_points, created_at=datetime('now','localtime')",
+            (fingerprint_id, threshold, sample_interval, json.dumps(list(scene_points))),
+        )
+        if commit:
+            self.conn.commit()
 
     # ===== 标签 =====
 

@@ -56,6 +56,8 @@ class VisionProcessor:
         scene_threshold: float = None,
         max_scenes: int = None,
         frames_per_scene: int = None,
+        scene_concurrent: int = None,
+        scene_sample_interval: float = None,
     ):
         from ..utils.config import get_config_value
         if config is None:
@@ -85,6 +87,8 @@ class VisionProcessor:
         self.scene_threshold = scene_threshold if scene_threshold is not None else cv("scene_detection.threshold", 0.3)
         self.max_scenes = max_scenes if max_scenes is not None else cv("scene_detection.max_scenes", 10)
         self.frames_per_scene = frames_per_scene if frames_per_scene is not None else cv("scene_detection.frames_per_scene", 10)
+        self.scene_concurrent = scene_concurrent if scene_concurrent is not None else cv("scene_detection.concurrent", 3)
+        self.scene_sample_interval = scene_sample_interval if scene_sample_interval is not None else cv("scene_detection.sample_interval", 0.5)
 
         self.provider_config = get_provider_config(provider)
         self.model = self.provider_config.get("default_model", "") if self.provider_config else ""
@@ -423,7 +427,8 @@ class VisionProcessor:
 
     def _process_video_by_scenes(self, video_path: str, title: str, duration: float, audio_context: str = "", subtitle_segments: List[Dict] = None) -> Dict:
         """场景分段分析模式：检测场景 → 逐段分析 → 合并结果"""
-        from .scene_detector import get_segments
+        import os
+        from .scene_detector import detect_scenes, build_segments
         from ..utils.prompt_loader import get_prompt
 
         timing = {}
@@ -439,12 +444,38 @@ class VisionProcessor:
             debug_subdir.mkdir(parents=True, exist_ok=True)
             logger.info(f"场景模式调试目录: {debug_subdir}")
 
-        segments = get_segments(video_path, duration, self.scene_threshold, self.max_scenes)
-        logger.info(f"场景分段数: {len(segments)}, 将逐段分析后合并")
+        # 场景切换点：先查缓存（按文件指纹键控），未命中才检测并写回
+        scene_points = None
+        fp_id = None
+        if self.db_store is not None:
+            try:
+                file_size = os.path.getsize(video_path)
+                fp_id = self.db_store.get_fingerprint_id(file_size, duration)
+                if fp_id:
+                    scene_points = self.db_store.get_scene_cache(
+                        fp_id, self.scene_threshold, self.scene_sample_interval)
+                    if scene_points is not None:
+                        logger.info(f"场景检测缓存命中: {len(scene_points)} 个切换点 (threshold={self.scene_threshold})")
+            except Exception as e:
+                logger.debug(f"场景缓存读取失败(忽略): {e}")
+
+        if scene_points is None:
+            scene_points = detect_scenes(video_path, self.scene_threshold, self.scene_sample_interval)
+            if fp_id:
+                try:
+                    self.db_store.save_scene_cache(
+                        fp_id, self.scene_threshold, scene_points, self.scene_sample_interval)
+                    logger.debug("场景切换点已写入缓存")
+                except Exception as e:
+                    logger.debug(f"场景缓存写入失败(忽略): {e}")
+
+        segments = build_segments(scene_points, duration, self.max_scenes)
+        logger.info(f"场景分段数: {len(segments)}, 将逐段分析后合并 (并发={max(1, int(self.scene_concurrent or 1))})")
 
         scene_results = []
 
-        for seg_idx, (seg_start, seg_end) in enumerate(segments):
+        def _analyze_one_segment(seg_idx: int, seg_start: float, seg_end: float):
+            """分析单个场景段（独立可并发）：抽帧+YOLO+VLM，失败返回 None"""
             seg_duration = seg_end - seg_start
             logger.info(f"[场景 {seg_idx+1}/{len(segments)}] {seg_start:.1f}s - {seg_end:.1f}s (时长: {seg_duration:.1f}s)")
 
@@ -454,7 +485,7 @@ class VisionProcessor:
 
             if not seg_analysis or "error" in seg_analysis:
                 logger.warning(f"[场景 {seg_idx+1}] 分析失败，跳过")
-                continue
+                return None
 
             # 保存每段的YOLO检测结果到调试目录
             if debug_subdir:
@@ -492,7 +523,9 @@ class VisionProcessor:
 
             scene_desc = seg_result.get("description", "") or seg_result.get("error", "分析失败")
             scene_kw = seg_result.get("keywords", "")
-            scene_results.append({
+            logger.info(f"[场景 {seg_idx+1}] → 描述: {scene_desc[:60]}... 关键词: {scene_kw[:60]}...")
+
+            return {
                 "index": seg_idx,
                 "start": seg_start,
                 "end": seg_end,
@@ -500,8 +533,28 @@ class VisionProcessor:
                 "description": scene_desc,
                 "keywords": scene_kw,
                 "frames": len(seg_analysis["frames_for_vlm"]),
-            })
-            logger.info(f"  → 描述: {scene_desc[:60]}... 关键词: {scene_kw[:60]}...")
+            }
+
+        scene_concurrent = max(1, int(self.scene_concurrent or 1))
+        if scene_concurrent <= 1 or len(segments) <= 1:
+            for seg_idx, (seg_start, seg_end) in enumerate(segments):
+                result = _analyze_one_segment(seg_idx, seg_start, seg_end)
+                if result is not None:
+                    scene_results.append(result)
+        else:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            workers = min(scene_concurrent, len(segments))
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                futures = [
+                    ex.submit(_analyze_one_segment, seg_idx, seg_start, seg_end)
+                    for seg_idx, (seg_start, seg_end) in enumerate(segments)
+                ]
+                for fut in as_completed(futures):
+                    result = fut.result()
+                    if result is not None:
+                        scene_results.append(result)
+            # 按场景序号排序，保证合并顺序与串行一致
+            scene_results.sort(key=lambda r: r["index"])
 
         if not scene_results:
             return {"error": "所有场景分析失败"}

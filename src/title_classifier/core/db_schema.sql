@@ -98,3 +98,15 @@ CREATE INDEX IF NOT EXISTS idx_media_tags_tag ON media_tags(tag_id);
 CREATE INDEX IF NOT EXISTS idx_change_log_media ON change_log(media_id);
 CREATE INDEX IF NOT EXISTS idx_change_log_time ON change_log(changed_at);
 CREATE INDEX IF NOT EXISTS idx_vlm_frames_media ON vlm_frames(media_id);
+
+-- 场景切换点缓存（按文件指纹 + 阈值 + 采样间隔键控，重跑免重复检测）
+CREATE TABLE IF NOT EXISTS scene_cache (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    fingerprint_id  INTEGER NOT NULL REFERENCES video_fingerprints(id) ON DELETE CASCADE,
+    threshold       REAL NOT NULL,
+    sample_interval REAL NOT NULL DEFAULT 0.5,
+    scene_points    TEXT NOT NULL,
+    created_at      TEXT DEFAULT (datetime('now', 'localtime')),
+    UNIQUE(fingerprint_id, threshold, sample_interval)
+);
+CREATE INDEX IF NOT EXISTS idx_scene_cache_fp ON scene_cache(fingerprint_id);

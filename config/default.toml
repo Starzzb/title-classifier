@@ -84,6 +84,8 @@ enabled = true
 threshold = 0.3
 max_scenes = 10
 frames_per_scene = 10
+sample_interval = 0.5    # 场景检测采样间隔（秒），增大可加速长视频检测（精度略降）
+concurrent = 3           # 逐场景段并发分析数（YOLO 推理自动串行，VLM API 并发路数）
 
 [providers]
 default = "gcli"
