@@ -6,6 +6,7 @@
 - [视频帧选择策略](#视频帧选择策略)
 - [Embedding变化检测](#embedding变化检测)
 - [无意义标题检测](#无意义标题检测)
+- [CUDA加速](#cuda加速)
 - [GUI功能说明](#gui功能说明)
 - [临时目录说明](#临时目录说明)
 - [常见问题](#常见问题)
@@ -235,6 +236,57 @@ if cn_count == 0 and core_len <= 4:
 逻辑：
 1. 阶段1：标题无有效关键词 → 标记为`[未分类]`，设置`needs_vision=true`
 2. 阶段1c：只处理`needs_vision=true`的记录 → 送入VLM
+
+---
+
+## CUDA加速
+
+### Q: 如何启用 GPU (CUDA) 加速？
+
+**硬件要求**：NVIDIA GPU，显存 ≥ 4GB，驱动支持对应 CUDA 版本（`nvidia-smi` 查看驱动最高支持的 CUDA 版本）。
+
+**安装**（Windows / uv 环境，torch/torchvision 走 PyTorch cu130 索引，已在 `pyproject.toml` 配置）：
+
+```bash
+uv sync --extra dev
+```
+
+**验证**：
+
+```bash
+.venv\Scripts\python.exe -c "import torch; print(torch.cuda.is_available())"   # True
+```
+
+**配置**：`config/user.toml` 中
+
+```toml
+[general]
+device = "auto"      # 自动检测：有可用GPU且显存≥4GB → CUDA
+
+[yolo]
+backend = "auto"     # 关键！CUDA 时自动选 pytorch，CPU 时自动选 openvino
+                     # 若钉死为 "openvino"，即使有 GPU 也会被强制走 CPU 推理
+```
+
+**实测收益**（RTX 4060 Laptop 8GB，yolo11m 三模型 + CLIP ViT-B-16，2026-09 基准）：
+
+| 项目 | CPU/OpenVINO | CUDA/PyTorch | 加速比 |
+|---|---|---|---|
+| YOLO 三模型推理 | 373ms/帧 | 43ms/帧 | **8.8x** |
+| CLIP 差异度评分 | 343ms/帧 | 9ms/帧 | **38x** |
+
+**复测**：`python scripts/bench_yolo_device.py <视频路径> [--frames 30] [--no-clip]`
+
+### Q: 如何回退到 CPU？
+
+- 把 `[yolo] backend` 改回 `"openvino"`，或
+- `[general] device = "cpu"`（无 GPU 机器上 `auto` 也会自动回退，行为不变）
+
+### Q: 已知限制
+
+- `torchaudio` 在 cu130 索引最高只有 2.11（官方已停止随新 torch 发布 CUDA 版），保持 PyPI CPU 版即可——它只服务于 silero VAD（CPU），实测与 torch 2.14 兼容
+- 短视频/帧数少时 CUDA 预热（kernel 编译）会摊薄收益，连续批量处理收益最大
+- 多线程并发推理受 GPU 锁串行化（`_gpu_lock`），并发 worker 对 GPU 收益有限
 
 ---
 

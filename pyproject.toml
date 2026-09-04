@@ -28,6 +28,7 @@ dependencies = [
     "Pillow>=9.0.0",
     "open-clip-torch>=2.20.0",
     "torch>=2.0.0",
+    "torchvision>=0.28.0",
     "ultralytics>=8.0.0",
     "tomli-w>=1.0.0",
     "tomli>=2.0.0; python_version < '3.11'",
@@ -61,3 +62,22 @@ python_files = ["test_*.py"]
 [project.urls]
 Homepage = "https://github.com/Starzzb/title-classifier"
 Repository = "https://github.com/Starzzb/title-classifier.git"
+
+# PyTorch CUDA 构建（Windows）：显式索引，仅 torch 系列走 cu130，
+# 其余依赖仍走 PyPI。CUDA wheel 自带 CUDA 运行库，无需额外 nvidia-* 包。
+# 驱动要求：NVIDIA 驱动 >= 580.x（支持 CUDA 13.x）。
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu130", marker = "sys_platform == 'win32'" },
+]
+torchvision = [
+    { index = "pytorch-cu130", marker = "sys_platform == 'win32'" },
+]
+torchaudio = [
+    { index = "pytorch-cu130", marker = "sys_platform == 'win32'" },
+]
