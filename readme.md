@@ -12,6 +12,7 @@
 - [YOLO视觉分析](#yolo视觉分析)
 - [帧数处理流程](#帧数处理流程)
 - [OpenVINO CPU加速](#openvino-cpu加速)
+- [CUDA加速与推理设备](#cuda加速与推理设备)
 - [运动检测前置过滤](#运动检测前置过滤)
 - [硬件视频解码](#硬件视频解码)
 - [多线程并行处理](#多线程并行处理)
@@ -71,6 +72,7 @@
 | Python | 3.10+ | 推荐 3.12 |
 | 操作系统 | Windows / macOS / Linux | 全平台兼容 |
 | 磁盘空间 | >= 500MB | 包含模型文件和依赖 |
+| NVIDIA GPU（可选） | 显存 >= 4GB | 有则自动启用 CUDA 加速（YOLO 8.8x / CLIP 38x），无则自动回退 CPU |
 | 权限要求 | 目标目录读写权限 | 必需 |
 | ffmpeg | 全局 PATH | 用于视频帧提取和音频处理 |
 
@@ -664,11 +666,14 @@ uv run title-classifier vision --use-yolo --vlm-frames 15 -p gcli
 
 ### 性能对比
 
-| 后端 | 推理速度 | 精度 | 适用场景 |
+| 后端 | 推理速度（相对） | 精度 | 适用场景 |
 |------|---------|------|---------|
-| PyTorch (FP32) | 1x | 最高 | GPU 或调试 |
-| OpenVINO (FP16) | 2-3x | 极小损失 | **CPU 推荐** |
-| OpenVINO (INT8) | 3-5x | 较小损失 | 极致性能 |
+| PyTorch (CUDA) | **8.8x**（YOLO三模型）/ CLIP **38x** | 最高 | **有 NVIDIA GPU 时首选** |
+| OpenVINO (FP16) | 2-3x | 极小损失 | CPU 推荐 |
+| PyTorch (FP32, CPU) | 1x | 最高 | 调试或无 OpenVINO 环境 |
+| OpenVINO (INT8) | 3-5x（vs FP32 CPU） | 较小损失 | 极致 CPU 性能 |
+
+> 实测基准（RTX 4060 Laptop 8GB，yolo11m 三模型 + CLIP ViT-B-16）：CPU/OpenVINO 373ms/帧 vs CUDA/PyTorch 43ms/帧；CLIP 差异度 343ms/帧 vs 9ms/帧。复测：`python scripts/bench_yolo_device.py <视频路径>`
 
 ### 使用方法
 
@@ -684,13 +689,13 @@ uv run title-classifier vision --use-yolo -p gcli
 #### 指定后端
 
 ```powershell
-# 强制使用 OpenVINO（默认）
+# 强制使用 OpenVINO（CPU 环境默认；有 GPU 时钉死此值会绕过 CUDA）
 uv run title-classifier vision --use-yolo --backend openvino -p gcli
 
 # 强制使用 PyTorch
 uv run title-classifier vision --use-yolo --backend pytorch -p gcli
 
-# 自动检测后端
+# 自动检测后端（推荐）：CUDA设备→PyTorch，CPU→OpenVINO
 uv run title-classifier vision --use-yolo --backend auto -p gcli
 ```
 
@@ -702,7 +707,9 @@ uv run title-classifier vision --use-yolo --backend auto -p gcli
 [yolo]
 model_type = "pose"      # detect / pose / segment
 confidence = 0.5         # 置信度阈值（0.1-0.9）
-backend = "openvino"     # auto / openvino / pytorch
+backend = "auto"         # auto / openvino / pytorch
+                         # auto: CUDA设备→pytorch, CPU→openvino
+                         # 注意钉死 "openvino" 会在有 GPU 时也强制走 CPU
 
 [yolo.openvino]
 precision = "FP16"  # FP16 / INT8
@@ -943,18 +950,22 @@ uv run title-classifier vision --use-yolo --concurrent 8 -p gcli
 
 ### 最佳实践
 
-| CPU 核心数 | 推荐并发数 | 说明 |
+| 环境 | 推荐并发数 | 说明 |
 |-----------|-----------|------|
-| 4 核 | 3-4 | 留 1 核给系统 |
-| 8 核 | 6-7 | 留 1-2 核给系统 |
-| 16 核 | 12-14 | 留 2-4 核给系统 |
+| CUDA（默认） | 2-4 | GPU 推理自动串行（吞吐 ~49 帧/s），并发收益主要在抽帧/解码/VLM 调用重叠 |
+| 4 核 CPU | 3-4 | 留 1 核给系统 |
+| 8 核 CPU | 6-7 | 留 1-2 核给系统 |
+| 16 核 CPU | 12-14 | 留 2-4 核给系统 |
+
+> **注意**：GPU 模式下推理阶段受 `_gpu_lock` 串行化，盲目调大并发不会提升推理吞吐（实测多实例并发反而更慢）；并发的主要价值是让帧提取、CLIP/VLM 调用与推理流水线重叠。
 
 ### 内存需求
 
 每个并发线程共享同一个 YOLO 模型实例，内存占用约为：
 
 - **OpenVINO FP16**: ~200MB（3 个模型）
-- **PyTorch FP32**: ~500MB（3 个模型）
+- **PyTorch FP32 (CPU)**: ~500MB（3 个模型）
+- **PyTorch CUDA**: 运行时内存与 CPU 版相近，显存占用 <1GB（三模型+CLIP）；代价是磁盘空间（cu130 版 torch+torchvision 约 4GB）
 
 4 线程并发时，总内存占用约为 1-2GB。
 
@@ -1249,52 +1260,51 @@ GUI 所有操作自动同步到数据库：
 
 ---
 
-## CPU 多线程推理
+## CUDA加速与推理设备
 
-### 为什么不用 CUDA
+### 当前状态（v8.3.0 起）
 
-本项目默认使用 **CPU 版 PyTorch**（~250MB），不再推荐 CUDA 版（~2.4GB）。原因：
+项目**已启用 CUDA 加速**（`torch 2.14.0+cu130` + `torchvision 0.29.0+cu130`，Windows 下由 `pyproject.toml` 中的 pytorch-cu130 索引自动安装）。无 GPU 时 `uv sync` 会因 win32 marker 限制自动回退 CPU 版，同一份 lockfile 全平台兼容。
 
-| 问题 | 说明 |
+### 实测收益（RTX 4060 Laptop 8GB）
+
+| 项目 | CPU/OpenVINO | CUDA/PyTorch | 加速比 |
+|---|---|---|---|
+| YOLO 三模型推理 | 373ms/帧 | 43ms/帧 | **8.8x** |
+| CLIP 差异度评分 | 343ms/帧 | 9ms/帧 | **38x** |
+
+### 设备选择逻辑
+
+| 配置 | 行为 |
 |------|------|
-| **uv lock 冲突** | `uv run` 会自动同步 lockfile，将 CUDA 版覆盖回 CPU 版，每次需加 `--no-sync` |
-| **依赖膨胀** | CUDA 版 PyTorch ~4.4GB，CPU 版 ~250MB，差 18 倍 |
-| **并发限制** | CUDA 不支持多线程并发推理，必须串行执行（`_gpu_lock`） |
-| **多任务死锁** | 不能同时运行两个 CUDA 模式的视觉识别任务 |
-| **收益有限** | YOLO 单帧推理 200ms→20ms，但 VLM 调用（云端 API）才是瓶颈 |
+| `[general] device = "auto"`（默认） | 有可用 GPU（显存 ≥ 4GB）→ CUDA；否则 CPU |
+| `device = "cpu"` | 强制 CPU（OpenVINO 后端） |
+| `device = "cuda"` | 强制 GPU，CUDA 不可用时回退 CPU |
 
-**CPU 多核并行的优势**：20 核 CPU 可同时处理 4 个视频（`--concurrent 4`），总吞吐量反而更高。
+### GPU 并发结论（实测）
+
+GPU 推理通过 `_gpu_lock` 全局串行，这是**有意设计且经实测背书**：
+
+| 模式 | 吞吐 |
+|------|------|
+| GPU 串行（生产模式） | ~49 帧/s |
+| GPU 多实例真并发（2/4/8 路） | ~40 帧/s（反而更慢，显存占用 x3） |
+| CPU 8 线程并发（OpenVINO） | ~21 帧/s |
+
+**即使完全串行，GPU 吞吐仍是 CPU 8 线程并发的 2 倍以上。** 并发 worker（`--concurrent`）的价值在于帧抽取/解码等 CPU 阶段的流水线并行，推理阶段无需并发。
 
 ### 使用方式
 
-**CLI：**
 ```bash
-# 默认 CPU 模式
-uv run title-classifier vision --use-yolo -p gcli
-
-# 指定并发数（推荐 4）
+# 默认即 auto：有 GPU 走 CUDA，无 GPU 走 CPU+OpenVINO
 uv run title-classifier vision --use-yolo --concurrent 4 -p gcli
 ```
 
-**GUI：**
-```bash
-uv run title-classifier gui
-```
-
-视觉识别标签页的"推理设备"下拉框选择 cpu（默认）。
-
-### 并发策略
-
-| 模式 | YOLO推理 | VLM调用 | 并发数 |
-|------|----------|---------|--------|
-| cpu（默认） | CPU多核并行 | 并发 | min(cores-1, 4) |
-
-- **CPU模式**：利用多核CPU并行推理，多个视频同时处理
-- **并发数**：默认 `min(cores-1, 4)`，GUI 中可手动调整
+安装/验证/回退细节见 [FAQ - CUDA加速](FAQ.md#cuda加速)；设备基准复测：`python scripts/bench_yolo_device.py <视频路径>`
 
 ### 多任务并行
 
-可以同时运行多个实例处理不同 CSV：
+可以同时运行多个实例处理不同 CSV（GPU 侧推理自动串行，互不干扰）：
 
 ```bash
 # 终端1：GUI（处理CSV1）
@@ -1314,19 +1324,13 @@ uv run title-classifier vision -c "data/output/Movies/title_review.csv" --use-yo
 
 **CLI重试失败行：**
 ```bash
-uv run --no-sync title-classifier vision -c "data/output/Download/title_review.csv" --use-yolo --retry-failed -p gcli
+uv run title-classifier vision -c "data/output/Download/title_review.csv" --use-yolo --retry-failed -p gcli
 ```
 
 **GUI重试失败行：**
 - 视觉识别标签页的"重试失败行"按钮
 - 只处理 `vision_failed=true` 的行
 - 成功后自动清除失败标记
-
-### 设备检测逻辑
-
-- `auto`（默认）：使用 CPU
-- `cpu`：强制 CPU（推荐）
-- `cuda`：强制 GPU，CUDA 不可用时回退到 CPU（需要手动安装 CUDA 版 PyTorch）
 
 ---
 
@@ -1344,12 +1348,15 @@ title-classifier/
 │       │   ├── refiner.py           # AI优化
 │       │   ├── vision.py            # 视觉识别（VLM + YOLO + 字幕上下文）
 │       │   ├── renamer.py           # 重命名
+│       │   ├── model_registry.py    # 声明式模型注册表（模型管理系统）
+│       │   ├── model_downloader.py  # 模型下载逻辑
+│       │   ├── scene_detector.py    # 场景切换检测
 │       │   ├── db_schema.sql        # SQLite 表结构定义
 │       │   └── db_store.py          # SQLite 数据库访问层
 │       │
 │       ├── detectors/
 │       │   ├── base.py              # 检测器基类
-│       │   ├── yolo.py              # YOLO检测
+│       │   ├── yolo.py              # YOLO检测（OpenVINO/CUDA 双后端）
 │       │   └── clip.py              # CLIP分类
 │       │
 │       ├── providers/
@@ -1363,13 +1370,22 @@ title-classifier/
 │       │   ├── atomic_csv.py        # 原子化CSV读写（崩溃安全）
 │       │   ├── config.py            # 配置加载（TOML）
 │       │   ├── file_resolve.py      # 文件路径解析（Stage2重命名后回退查找）
+│       │   ├── fingerprint.py       # 文件指纹（去重）
+│       │   ├── crash_reporter.py    # 崩溃报告
 │       │   ├── muxer.py             # 字幕封装（SRT嵌入视频）
 │       │   ├── subtitle_postprocessor.py  # 字幕后处理
 │       │   ├── prompt_loader.py     # 提示词加载
 │       │   └── stats.py             # 标签统计
 │       │
 │       └── gui/
-│           ├── app.py               # 图形界面
+│           ├── app.py               # 图形界面主窗口
+│           ├── stage_scan.py        # Stage1 扫描页
+│           ├── stage_refine.py      # Stage1b AI优化页
+│           ├── stage_audio.py       # Stage1c 音频识别页
+│           ├── stage_vision.py      # Stage1c 视觉识别页
+│           ├── stage_rename.py      # Stage2 重命名页
+│           ├── model_manager.py     # 模型管理页
+│           ├── settings.py          # 设置页
 │           └── debug_window.py      # 调试窗口
 │
 ├── config/
@@ -1401,7 +1417,12 @@ title-classifier/
 │   ├── download_models.py         # 一键下载所有模型
 │   ├── download_clip.py           # 下载CLIP模型
 │   ├── download_yolo_models.py    # 下载YOLO模型
+│   ├── bench_yolo_device.py       # 设备基准（CPU/OpenVINO vs CUDA/PyTorch）
+│   ├── convert_yolo_openvino.py   # OpenVINO导出/INT8量化校准
 │   ├── import_csv.py              # CSV导入到数据库
+│   ├── cleanup_full.py            # media.db 与磁盘双向对齐
+│   ├── sync_rename.py             # 重命名后同步数据库路径
+│   ├── backfill_fingerprints.py   # 回填文件指纹
 │   └── test_prompts.py            # 测试prompt效果
 │
 ├── tests/                           # 测试文件
@@ -1578,7 +1599,35 @@ uv run title-classifier vision --all -p gcli
 
 ## 更新日志
 
-### v8.1.0（当前版本）
+### v8.3.0（当前版本）
+
+**新增：CUDA 加速**
+
+- torch/torchvision 切换 PyTorch cu130 构建（`torch 2.14.0+cu130`，win32 marker 限定，无 GPU 平台自动回退 CPU 版）
+- `torchvision` 提升为直接依赖以命中 cu130 索引（uv 的 sources 只对直接依赖生效）
+- `torchaudio` 保持 PyPI CPU 版：cu130 索引最高仅 2.11（官方停止随新 torch 发布 CUDA 版），仅服务 silero VAD，实测兼容 torch 2.14
+- 默认后端 `openvino` → `auto`：CUDA 设备自动用 PyTorch，CPU 用 OpenVINO（修复钉死 openvino 导致 GPU 被绕过）
+- 实测（RTX 4060 Laptop 8GB）：YOLO 三模型 8.8x（373→43ms/帧）、CLIP 38x（343→9ms/帧）
+- GPU 并发实测：串行吞吐 ~49 帧/s > CPU 8 线程并发 ~21 帧/s，`_gpu_lock` 串行化经数据背书；多实例真并发反而更慢且显存 x3
+
+**新增：设备基准脚本**
+
+- `scripts/bench_yolo_device.py`：CPU/OpenVINO vs CUDA/PyTorch 对比（YOLO 三模型 + CLIP，含预热与加速比输出）
+
+**性能：视觉流水线优化（约 2x）**
+
+- 批量抽帧单次解码（cv2 一次解码整段采样帧，CLIP/VLM 复用内存帧数组）
+- detect+pose 均阴性时早退跳过 segment 推理
+- 移除每帧 `cuda.empty_cache` 反模式
+- debug 绘图复用缓存的 raw_pose 结果
+- 移除传统模式死链与未使用的兼容函数（约 300 行）
+
+**文档**
+
+- FAQ 新增 CUDA 章节（安装/验证/回退/已知限制）
+- README 重写推理设备章节，登记基准脚本
+
+### v8.1.0
 
 **修复：YOLO 帧提取画面比例变形**
 
@@ -1966,7 +2015,7 @@ uv run title-classifier vision --all -p gcli
 - 新增 `[audio.postprocess]` 配置节
 - 移除旧的 `[audio.adaptive]` 配置节（已被VAD策略替代）
 
-### v8.2.0 (最新)
+### v8.2.0
 
 **新增：日志系统和耗时追踪**
 - 日志默认输出到 `logs/<日期>/` 目录，按天分目录，文件始终记录 DEBUG 级别
@@ -2056,34 +2105,6 @@ uv run title-classifier vision --all -p gcli
 - 支持图片文件（.jpg, .jpeg, .png, .bmp, .webp, .gif, .tiff）
 - 人体检测预处理默认启用（YOLO 模型）
 - 新增智能压缩、水印优先功能
-
-**v8.2.0 更新：**
-
-**模型管理系统重构：**
-- 模型管理页面重写：卡片式布局，显示模型描述、流水线角色、下载状态
-- 模型配置统一到 `config/default.toml` + `config/user.toml`，废弃 `config/models.json`
-- 模型切换真正生效：detectors 从 config 读取用户选择的模型
-- 新增 `core/model_registry.py`（声明式模型注册表）和 `core/model_downloader.py`（下载逻辑解耦）
-- 依赖包清理：移除 `onnxruntime-gpu`，新增 `tomli`（Python 3.10 兼容）和 `huggingface_hub`（可选）
-
-**扫描入库增强：**
-- 新增 `--sync-db` 参数：仅同步数据库，不生成 CSV（适合全盘索引）
-- `--sync-db` 同步完成后自动检查缺少视觉描述的记录，生成待处理 CSV
-- `--force` 模式自动更新数据库
-- GUI 扫描页面新增"同步数据库"选项（与"强制重新分类"互斥）
-
-**标题优化页面重构：**
-- 按钮分组：AI操作 / 编辑 / 过滤，布局更清晰
-- 新增"最终文件名预览"列，实时显示 `[关键词]_原标题` 效果
-- 多条件过滤下拉（needs_vision / audio_recognized / 已修改）
-- 新增撤销功能（最近 10 步）
-- 修改行高亮加深（`#c8e0ff`）
-
-**其他修复：**
-- 修复 `stats_label` AttributeError（模型管理页面初始化顺序）
-- 修复主题切换不持久化（启动时从 config 读取主题）
-- 修复视觉描述/关键词不写入数据库（CLI 和 GUI 两条路径）
-- 修复 CLIP 模型状态检测（目录名映射修正）
 
 ### v3.0.0
 - 新增阶段 1c：视觉理解提取关键词

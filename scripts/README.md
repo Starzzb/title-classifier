@@ -66,6 +66,7 @@ python scripts/extract_original.py --all
 | `import_csv.py` | 从 CSV 导入数据到 SQLite 数据库 |
 | `test_prompts.py` | 测试 AI prompt 效果 |
 | `cleanup_full.py` | media.db 与磁盘双向对齐（以磁盘为准，默认 dry-run，`--execute` 前自动备份） |
+| `bench_yolo_device.py` | YOLO/CLIP 设备基准（CPU/OpenVINO vs CUDA/PyTorch），附加速比 |
 
 ```bash
 python scripts/import_csv.py                           # 导入所有CSV到数据库

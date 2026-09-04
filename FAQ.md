@@ -411,11 +411,11 @@ uv run python stage1c_vision_refine.py --retry-errors
 ### Q22: 如何提高处理速度？
 
 **优化建议**：
-1. 减少CLIP分析帧数：`--clip-frames 3`
+1. **启用 CUDA 加速**（有 NVIDIA GPU 时收益最大，YOLO 8.8x / CLIP 38x，见上文[CUDA加速](#cuda加速)章节）
 2. 减少VLM帧数：`--vlm-frames 2`
-3. 减少关键帧数：`--max-keyframes 5`
-4. 使用GPU加速（如果可用）
-5. 排除不需要的目录：`--exclude-dir temp`
+3. 启用运动检测（默认开启，静止帧跳过推理）
+4. 排除不需要的目录：`--exclude-dir temp`
+5. 适当增加并发数：`--concurrent 4`（GPU 下推理自动串行，并发收益在抽帧/解码/VLM 调用重叠）
 
 ### Q23: 如何撤销重命名？
 

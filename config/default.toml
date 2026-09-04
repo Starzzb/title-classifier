@@ -52,7 +52,7 @@ clip = "CLIP-ViT-B-16-laion2B-s34B-b88K"
 [yolo]
 model_type = "pose"
 confidence = 0.5
-backend = "openvino"
+backend = "auto"         # auto: CUDA设备用pytorch, CPU用openvino; 也可强制指定
 
 [yolo.openvino]
 precision = "FP16"
