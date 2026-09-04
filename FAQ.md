@@ -412,10 +412,11 @@ uv run python stage1c_vision_refine.py --retry-errors
 
 **优化建议**：
 1. **启用 CUDA 加速**（有 NVIDIA GPU 时收益最大，YOLO 8.8x / CLIP 38x，见上文[CUDA加速](#cuda加速)章节）
-2. 减少VLM帧数：`--vlm-frames 2`
-3. 启用运动检测（默认开启，静止帧跳过推理）
-4. 排除不需要的目录：`--exclude-dir temp`
-5. 适当增加并发数：`--concurrent 4`（GPU 下推理自动串行，并发收益在抽帧/解码/VLM 调用重叠）
+2. **长视频场景模式**：切换点有缓存（重跑免检测），逐段分析默认 3 路并发（`[scene_detection] concurrent` 可调）
+3. 减少VLM帧数：`--vlm-frames 2`
+4. 启用运动检测（默认开启，静止帧跳过推理）
+5. 排除不需要的目录：`--exclude-dir temp`
+6. 适当增加并发数：`--concurrent 4`（GPU 下推理自动串行，并发收益在抽帧/解码/VLM 调用重叠）
 
 ### Q23: 如何撤销重命名？
 
