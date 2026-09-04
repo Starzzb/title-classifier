@@ -47,7 +47,7 @@
 | 功能模块 | 特性描述 |
 |---------|---------|
 | **YOLO 视觉分析** | 集成 YOLO11/YOLOv8，支持检测、姿态估计、实例分割 |
-| **视频全面分析** | 每2秒采样，智能选择10帧代表性帧给VLM |
+| **视频全面分析** | 按采样间隔（默认5秒）采样，智能选择10帧代表性帧给VLM |
 | **姿态分析** | 17个关键点，识别跪姿、站立、坐姿等动作 |
 | **智能帧选择** | 基于姿态变化、置信度、关键点可见性选择最佳帧 |
 | **关键词提取** | 聚焦穿着、姿势、行为，水印博主名最优先 |
@@ -336,15 +336,28 @@ uv run title-classifier vision [选项]
 | `-c, --csv` | CSV文件路径 |
 | `-p, --provider` | AI Provider |
 | `--use-yolo` | 使用YOLO检测 |
-| `--yolo-model` | YOLO模型类型（detect/pose/segment，可多选） |
-| `--yolo-conf` | YOLO置信度阈值（默认0.4） |
+| `--comprehensive` | 全面分析模式（detect+pose+segment 三模型投票） |
 | `--use-clip` | 使用CLIP预分类 |
+| `--yolo-conf` | YOLO置信度阈值（默认0.5） |
+| `--clip-threshold` | CLIP置信度阈值（默认0.25） |
 | `--vlm-frames` | VLM帧数（默认10） |
-| `--analysis-step` | 采样间隔秒数（默认2.0） |
-| `--device` | 推理设备（auto/cuda/cpu，默认auto） |
-| `--concurrent` | 并发处理视频数（默认1，推荐3） |
+| `--analysis-step` | 采样间隔秒数（默认5.0） |
+| `--max-sample-frames` | 采样帧数上限（默认50，超出均匀分布） |
+| `--device` | 推理设备（auto/cuda/cpu，默认读配置；auto=有GPU用CUDA） |
+| `--backend` | YOLO后端（auto/openvino/pytorch，默认auto） |
+| `--concurrent` | 并发处理视频数（默认4） |
+| `--no-motion-detection` | 禁用运动检测前置过滤 |
+| `--motion-threshold` | 运动检测阈值%（默认10.0） |
+| `--no-scene-detection` | 禁用场景切分 |
+| `--scene-threshold` | 场景切分阈值0-1（默认0.3） |
+| `--max-scenes` | 最大场景数（默认10） |
+| `--frames-per-scene` | 每场景抽帧数（默认10） |
 | `--retry-failed` | 重试之前失败的行（vision_failed=true） |
 | `--all` | 处理所有未识别文件 |
+| `--auto-import` | 完成后自动导入数据库 |
+| `--debug` | 调试模式（保存VLM请求等中间产物） |
+
+> YOLO 模型类型（detect/pose/segment）由 `config/default.toml` 的 `[models]` 节配置，不再通过 CLI 参数切换。
 
 ### rename 命令 - 执行重命名
 
@@ -484,7 +497,7 @@ uv run title-classifier vision --use-yolo -p gcli
 ```
 
 **送入VLM的图片逻辑**：
-- 每2秒采样一帧（可配置，上限50帧）
+- 按采样间隔采样（默认5秒，可配置，上限50帧）
 - 使用YOLO Pose模型分析每帧姿态
 - **分区段选择**：将采样帧等分为 vlm_frames 个区段（默认10段），每段内按评分选最优帧，保证全视频均匀覆盖
 - 区段内评分：置信度40% + 关键点可见性30% + 姿态变化30%；无人体帧取段内中间帧
@@ -500,7 +513,7 @@ uv run title-classifier vision --use-yolo --comprehensive -p gcli
 ```
 
 **送入VLM的图片逻辑**：
-- 每2秒采样一帧（可配置，上限50帧）
+- 按采样间隔采样（默认5秒，可配置，上限50帧）
 - **三个模型并行分析每帧**：
   - **detect模型**：检测人体位置和边界框
   - **pose模型**：分析人体姿态（17个关键点）
@@ -518,8 +531,8 @@ uv run title-classifier vision --use-yolo --comprehensive -p gcli
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                      采样阶段                                │
-│  视频时长 108秒，采样间隔 2秒                                 │
-│  → np.arange(0, 108, 2) = 54个采样点                         │
+│  视频时长 108秒，采样间隔 5秒（默认）                                 │
+│  → np.arange(0, 108, 5) = 22个采样点                         │
 │  → 超过 max_sample_frames(50) 限制                           │
 │  → np.linspace(0, 108, 50) = 50个采样点（均匀分布）           │
 │                                                              │
@@ -552,10 +565,10 @@ uv run title-classifier vision --use-yolo --comprehensive -p gcli
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `--analysis-step` | 2.0 | 采样间隔（秒），越小越细致 |
+| `--analysis-step` | 5.0 | 采样间隔（秒），越小越细致 |
 | `--max-sample-frames` | 50 | 采样帧数上限，超过后均匀分布 |
 | `--vlm-frames` | 10 | 发送给 VLM 的帧数 |
-| `--motion-threshold` | 5.0 | 运动检测阈值（%） |
+| `--motion-threshold` | 10.0 | 运动检测阈值（%） |
 
 ### 配置示例
 
@@ -1236,6 +1249,7 @@ GUI 所有操作自动同步到数据库：
 | `zhipu` | GLM-4.7-Flash | ZHIPU_API_KEY | 1b, 1c |
 | `gcli` | gemini-3-flash-preview | GCLI_API_KEY | 1b, 1c |
 | `mimo` | mimo-v2.5 | MIMO_API_KEY | 1c, audio |
+| `siliconflow` | Qwen/Qwen3.6-35B-A3B | SILICONFLOW_API_KEY | 1b, 1c |
 
 ### 自定义 Provider
 
