@@ -284,9 +284,9 @@ backend = "auto"     # 关键！CUDA 时自动选 pytorch，CPU 时自动选 ope
 
 ### Q: 已知限制
 
+- 多线程并发推理受 GPU 锁串行化（`_gpu_lock`），这是**有意设计且经实测背书**：GPU 侧推理全程串行，吞吐 ~49 帧/s；实测多实例真并发（2/4/8 路）反而更慢（~40 帧/s）且显存占用增至 3 倍。而 CPU/OpenVINO 8 路并发吞吐仅 ~21 帧/s——**即使完全串行，GPU 吞吐仍是 CPU 8 线程并发的 2 倍以上**，并发 worker 带来的收益主要体现在帧抽取/解码等 CPU 阶段，推理阶段无需并发
 - `torchaudio` 在 cu130 索引最高只有 2.11（官方已停止随新 torch 发布 CUDA 版），保持 PyPI CPU 版即可——它只服务于 silero VAD（CPU），实测与 torch 2.14 兼容
 - 短视频/帧数少时 CUDA 预热（kernel 编译）会摊薄收益，连续批量处理收益最大
-- 多线程并发推理受 GPU 锁串行化（`_gpu_lock`），并发 worker 对 GPU 收益有限
 
 ---
 
