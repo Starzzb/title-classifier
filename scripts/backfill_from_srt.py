@@ -50,10 +50,12 @@ def parse_srt_content(content: str):
 
 
 def find_srt_files(output_dir: str):
-    """遍历所有 subtitles 子目录, 收集 SRT 文件"""
+    """递归收集所有 subtitles 目录（含顶层 data/output/subtitles）下的 SRT 文件"""
     output_path = Path(output_dir)
     srt_files = []
-    for srt_dir in output_path.glob("*/subtitles"):
+    for srt_dir in output_path.rglob("subtitles"):
+        if not srt_dir.is_dir():
+            continue
         for srt_file in srt_dir.glob("*.srt"):
             srt_files.append(srt_file)
     return srt_files
