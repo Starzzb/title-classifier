@@ -522,11 +522,18 @@ def call_vision_api(
     }
 
     last_error = None
-    for attempt in range(retries):
+    attempt = 0
+    rate_429_count = 0
+    MAX_RATE_429 = 6  # 429 专用上限（限流是暂时状态，不计入普通重试次数）
+    from ..utils.rate_limiter import vision_rate_limiter
+    while attempt < retries:
+        # 全局限流协调：处于熔断窗口时等待；发车节流防惊群
+        vision_rate_limiter.wait_turn()
         t_start = time.perf_counter()
         try:
             result = _http_request(api_url, payload, api_key, timeout)
             elapsed = time.perf_counter() - t_start
+            vision_rate_limiter.report_success()
             content = result.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
 
             # 如果是推理模型，content 为空时尝试从 reasoning_content 提取
@@ -553,13 +560,25 @@ def call_vision_api(
         except Exception as e:
             elapsed = time.perf_counter() - t_start
             last_error = e
+            error_msg = str(e)
+
+            # 429 限流：全局指数退避，不消耗普通重试次数（等待配额窗口自愈）
+            if "429" in error_msg or "rate limit" in error_msg.lower():
+                rate_429_count += 1
+                vision_rate_limiter.report_429()
+                if rate_429_count >= MAX_RATE_429:
+                    logger.error(f"Vision API连续限流 {rate_429_count} 次，放弃本调用: {error_msg}")
+                    break
+                continue
+
             logger.error(f"Vision API调用失败 (尝试 {attempt+1}/{retries}, 耗时={elapsed:.2f}s): {e}")
-            if attempt < retries - 1:
+            attempt += 1
+            if attempt < retries:
                 # SSL/网络错误增加额外等待
-                if "SSL" in str(e) or "EOF" in str(e) or "UNEXPECTED_EOF" in str(e):
-                    time.sleep(3 * (attempt + 1))
+                if "SSL" in error_msg or "EOF" in error_msg or "UNEXPECTED_EOF" in error_msg:
+                    time.sleep(3 * attempt)
                 else:
-                    time.sleep(2 * (attempt + 1))
+                    time.sleep(2 * attempt)
 
     return f"[ERROR] {last_error}"
 
