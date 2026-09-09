@@ -34,10 +34,28 @@ clip_frames = 5
 max_keyframes = 8
 keyframe_threshold = 30.0
 analysis_step = 5.0
+concurrent = 4           # 视频间并发处理数（--concurrent 显式指定可覆盖；GPU 下推理仍自动串行）
 max_sample_frames = 50
 motion_detection = true
 motion_threshold = 10.0
 motion_min_interval = 15.0
+stitch_enabled = false
+stitch_grid = "2x2"
+two_pass_enabled = true
+
+[vision.overview]
+sample_interval = 1.0
+max_frames = 36
+grid = "3x3"
+max_pages = 6
+max_image_size = 960
+jpeg_quality = 82
+
+[vision.detail]
+max_images = 12
+per_scene = 2
+max_image_size = 1200
+jpeg_quality = 90
 
 [vision.decode]
 hw_accel = "auto"

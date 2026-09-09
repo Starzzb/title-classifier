@@ -90,6 +90,23 @@ class VisionProcessor:
         self.scene_concurrent = scene_concurrent if scene_concurrent is not None else cv("scene_detection.concurrent", 3)
         self.scene_sample_interval = scene_sample_interval if scene_sample_interval is not None else cv("scene_detection.sample_interval", 0.5)
 
+        self.stitch_enabled = cv("vision.stitch_enabled", False)
+        self.stitch_grid = cv("vision.stitch_grid", "2x2")
+        
+        # 两阶段自适应分析配置项
+        self.two_pass_enabled = cv("vision.two_pass_enabled", True)
+        self.overview_sample_interval = cv("vision.overview.sample_interval", 1.0)
+        self.overview_max_frames = cv("vision.overview.max_frames", 36)
+        self.overview_grid = cv("vision.overview.grid", "3x3")
+        self.overview_max_pages = cv("vision.overview.max_pages", 6)
+        self.overview_max_image_size = cv("vision.overview.max_image_size", 960)
+        self.overview_jpeg_quality = cv("vision.overview.jpeg_quality", 82)
+        
+        self.detail_max_images = cv("vision.detail.max_images", 12)
+        self.detail_per_scene = cv("vision.detail.per_scene", 2)
+        self.detail_max_image_size = cv("vision.detail.max_image_size", 1200)
+        self.detail_jpeg_quality = cv("vision.detail.jpeg_quality", 90)
+	
         self.provider_config = get_provider_config(provider)
         self.model = self.provider_config.get("default_model", "") if self.provider_config else ""
         self.api_key = get_api_key(provider)
@@ -267,14 +284,27 @@ class VisionProcessor:
         video_analysis = self._analyze_video_comprehensive(video_path, duration)
         timing["yolo_total"] = time.perf_counter() - t1
 
+        # 计算相邻帧的画面变化分数并写入 timeline
+        from .scene_detector import compute_frame_change_score
+        timeline = video_analysis["timeline"]
+        decoded_all = video_analysis.get("decoded_frames", [])
+        for i in range(len(timeline)):
+            if i == 0:
+                timeline[i]["change_score"] = 1.0
+            else:
+                prev_img = decoded_all[i - 1]
+                curr_img = decoded_all[i]
+                if prev_img is not None and curr_img is not None:
+                    timeline[i]["change_score"] = compute_frame_change_score(prev_img, curr_img)
+                else:
+                    timeline[i]["change_score"] = 0.0
+
         # 2. CLIP 差异度评分
         clip_diff_scores = None
         if self.use_clip and self.clip_classifier and self.clip_classifier._loaded:
             t_clip = time.perf_counter()
             try:
                 all_frames = video_analysis["frames"]
-                decoded_all = video_analysis.get("decoded_frames", [])
-                # 复用解码帧数组（与 frames 严格对齐），保证分数索引 == 帧索引
                 frames_for_diff = list(decoded_all) if decoded_all else \
                     [cv2.imread(f) for f in all_frames]
                 if frames_for_diff:
@@ -286,119 +316,177 @@ class VisionProcessor:
                 logger.warning(f"CLIP 差异度评分失败: {e}, 耗时={timing['clip_diff']:.2f}s")
                 clip_diff_scores = None
 
-        # 3. 帧选择
-        t2 = time.perf_counter()
-        selected_indices = self._select_representative_frames(
-            video_analysis["timeline"], max_frames=self.vlm_frames, clip_diff_scores=clip_diff_scores
-        )
-        selected_frames = video_analysis["frames"]
-        timing["frame_selection"] = time.perf_counter() - t2
-
-        logger.info(f"帧选择完成: 总帧数={len(selected_frames)}, 选中帧数={len(selected_indices)}, 耗时={timing['frame_selection']:.3f}s")
+        # 始终生成并写入 CLIP 差异评分到 timeline
+        if clip_diff_scores:
+            for i, score in enumerate(clip_diff_scores):
+                if i < len(timeline):
+                    timeline[i]["clip_diff_score"] = score
 
         # 3. 生成视频摘要
-        video_summary = self._generate_video_summary(video_analysis["timeline"], duration)
+        video_summary = self._generate_video_summary(timeline, duration)
 
-        # 4. 为每帧生成描述
-        frame_descriptions = self._generate_frame_descriptions(
-            video_analysis["timeline"], selected_indices
-        )
+        # 4. 判断是否开启两阶段自适应多模态分析
+        if getattr(self, "two_pass_enabled", True):
+            logger.info("[两阶段管线] 启用 VLM-A 概览 + VLM-B 细节智能分析流程")
 
-        # 5. 构建全面上下文
-        comprehensive_context = self._build_comprehensive_context(
-            video_summary, frame_descriptions, len(selected_indices)
-        )
+            # 4.1 构造一阶段概览图片分镜页
+            overview_frames_for_stitch = []
+            overview_timestamps = []
+            max_overview_frames = getattr(self, "overview_max_frames", 36)
+            n_analysis_frames = len(timeline)
+            
+            if n_analysis_frames <= max_overview_frames:
+                overview_indices = list(range(n_analysis_frames))
+            else:
+                overview_indices = [int(x) for x in np.linspace(0, n_analysis_frames - 1, max_overview_frames)]
 
-        # 5.5 构建每帧对应的字幕上下文
-        per_frame_subtitle = ""
-        if subtitle_segments:
-            frame_timestamps = [
-                video_analysis["timeline"][i]["timestamp"]
-                for i in selected_indices
-                if i < len(video_analysis["timeline"])
-            ]
-            per_frame_subtitle = self._build_per_frame_subtitle_context(frame_timestamps, subtitle_segments)
+            for idx in overview_indices:
+                img = decoded_all[idx]
+                if img is not None:
+                    overview_frames_for_stitch.append(img)
+                    overview_timestamps.append(timeline[idx]["timestamp"])
 
-        # 5.6 构建差异度提示（基于选中帧的 VLM 编号）
-        diff_hint = ""
-        if clip_diff_scores:
-            # 取选中帧的差异度分数，映射到 VLM 编号（1-based）
-            selected_diff = []
-            for vlm_idx, orig_idx in enumerate(selected_indices):
-                if orig_idx < len(clip_diff_scores):
-                    selected_diff.append((vlm_idx + 1, clip_diff_scores[orig_idx]))
-
-            # 按差异度排序，取前 1/3
-            selected_diff.sort(key=lambda x: x[1], reverse=True)
-            top_k = max(1, len(selected_diff) // 3)
-            top_frames = [str(vlm_num) for vlm_num, _ in selected_diff[:top_k]]
-
-            diff_hint = (
-                f"第 {', '.join(top_frames)} 帧与其他帧差异最大（场景变化最明显），"
-                f"请重点分析这些帧中的穿着、动作和场景细节。"
+            # 4.2 调用 VLM-A 分镜概览
+            overview_json = self._call_vlm_overview(
+                overview_frames_for_stitch,
+                title,
+                timestamps=overview_timestamps
             )
 
-        # 6. 调用VLM（传入音频上下文和每帧字幕）
-        frames_for_vlm = [selected_frames[i] for i in selected_indices if i < len(selected_frames)]
-        logger.info(f"调用VLM: {len(frames_for_vlm)}帧")
+            # 保存 VLM-A 的调试输出
+            if debug_subdir and "raw_vlm_a_text" in overview_json:
+                (debug_subdir / "vlm_a_response.txt").write_text(overview_json["raw_vlm_a_text"], encoding="utf-8")
 
-        # 复用内存解码帧（缺失时回退到路径），result/debug 仍保留路径列表
-        decoded_all = video_analysis.get("decoded_frames", [])
-        vlm_input = [
-            decoded_all[i] if i < len(decoded_all) and decoded_all[i] is not None else selected_frames[i]
-            for i in selected_indices
-        ]
-        
-        # 保存调试数据 - 检测结果
+            # 4.3 二阶段细节评分选帧
+            max_detail_images = getattr(self, "detail_max_images", 12)
+            selected_indices = self._select_final_detail_frames(
+                timeline,
+                overview_json,
+                max_images=max_detail_images
+            )
+            
+            selected_timestamps = [timeline[i]["timestamp"] for i in selected_indices]
+            frame_ids_for_b = [f"F{i+1:04d}" for i in selected_indices]
+
+            # 4.4 重新提取高清晰度（默认 1200 像素）黄金细节单帧
+            logger.info(f"[两阶段 VLM-B] 正在重新抽取 {len(selected_timestamps)} 张高清晰度黄金细节帧...")
+            hd_parent_dir = Path(video_analysis["frames"][0]).parent / "hd_frames" if video_analysis["frames"] else Path("logs/_vision_tmp") / "hd_frames"
+            hd_extracted_paths = extract_frames_cv2(
+                video_path,
+                str(hd_parent_dir),
+                selected_timestamps,
+                max_size=self.detail_max_image_size,
+                quality=self.detail_jpeg_quality
+            )
+
+            hd_frames_decoded = []
+            frames_for_vlm = []
+            aligned_timestamps = []
+            aligned_frame_ids = []
+            for idx, path in enumerate(hd_extracted_paths):
+                if path and Path(path).exists():
+                    data = np.fromfile(path, dtype=np.uint8)
+                    img = cv2.imdecode(data, cv2.IMREAD_COLOR)
+                    if img is not None:
+                        hd_frames_decoded.append(img)
+                        frames_for_vlm.append(path)
+                        aligned_timestamps.append(selected_timestamps[idx])
+                        aligned_frame_ids.append(frame_ids_for_b[idx])
+
+            # 高清提取失败兜底；同步保留图片、时间戳和帧 ID 的对应关系。
+            if not hd_frames_decoded:
+                logger.warning("[两阶段 VLM-B] 高清抽帧失败，退化复用一阶段采样缓存")
+                for i in selected_indices:
+                    if i < len(decoded_all) and decoded_all[i] is not None:
+                        hd_frames_decoded.append(decoded_all[i])
+                        frames_for_vlm.append(video_analysis["frames"][i])
+                        aligned_timestamps.append(timeline[i]["timestamp"])
+                        aligned_frame_ids.append(f"F{i+1:04d}")
+
+            selected_timestamps = aligned_timestamps
+            frame_ids_for_b = aligned_frame_ids
+
+            # 4.5 构造逐帧字幕上下文
+            per_frame_subtitle = ""
+            if subtitle_segments:
+                per_frame_subtitle = self._build_per_frame_subtitle_context(selected_timestamps, subtitle_segments)
+
+            # 4.6 调用 VLM-B 深度细节整合
+            t_vlm = time.perf_counter()
+            result = self._call_vlm_final(
+                hd_frames_decoded,
+                title,
+                overview_json,
+                audio_context=audio_context,
+                per_frame_subtitle=per_frame_subtitle,
+                frame_ids=frame_ids_for_b,
+                timestamps=selected_timestamps
+            )
+            timing["vlm_api"] = time.perf_counter() - t_vlm
+
+        else:
+            # 兼容回退模式：原有一次性识别流程
+            logger.info("[管线回退] 运行传统单阶段细节识别流程")
+            selected_indices = self._select_representative_frames(
+                timeline, max_frames=self.vlm_frames, clip_diff_scores=clip_diff_scores
+            )
+            selected_frames = video_analysis["frames"]
+            selected_timestamps = [timeline[i]["timestamp"] for i in selected_indices]
+            
+            frames_for_vlm = [selected_frames[i] for i in selected_indices if i < len(selected_frames)]
+            vlm_input = [decoded_all[i] if i < len(decoded_all) and decoded_all[i] is not None else selected_frames[i] for i in selected_indices]
+
+            # 逐帧字幕上下文
+            per_frame_subtitle = ""
+            if subtitle_segments:
+                per_frame_subtitle = self._build_per_frame_subtitle_context(selected_timestamps, subtitle_segments)
+
+            # 差异度提示
+            diff_hint = ""
+            if clip_diff_scores:
+                selected_diff = [(vlm_idx + 1, clip_diff_scores[orig_idx]) for vlm_idx, orig_idx in enumerate(selected_indices) if orig_idx < len(clip_diff_scores)]
+                selected_diff.sort(key=lambda x: x[1], reverse=True)
+                top_k = max(1, len(selected_diff) // 3)
+                top_frames = [str(vlm_num) for vlm_num, _ in selected_diff[:top_k]]
+                diff_hint = f"第 {', '.join(top_frames)} 帧与其他帧差异最大（场景变化最明显），请重点分析这些帧中的穿着、动作和场景细节。"
+
+            t_vlm = time.perf_counter()
+            result = self._call_vlm_comprehensive(
+                vlm_input,
+                title,
+                video_summary.get("main_pose", "未知"),
+                audio_context,
+                per_frame_subtitle,
+                diff_hint=diff_hint,
+                timestamps=selected_timestamps
+            )
+            timing["vlm_api"] = time.perf_counter() - t_vlm
+
+        # 5. 为每帧生成描述（仅在调试模式输出）
+        frame_descriptions = self._generate_frame_descriptions(timeline, selected_indices)
+
+        # 保存检测和 VLM 的调试数据
         if debug_subdir:
             self._save_detection_debug(video_analysis, debug_subdir)
-
-        # 构建prompt（用于调试）
-        prompt = self._build_comprehensive_prompt(title, len(frames_for_vlm), comprehensive_context, audio_context, per_frame_subtitle, diff_hint=diff_hint)
-
-        # 保存调试数据 - VLM输入帧和prompt
-        if debug_subdir:
-            self._save_vlm_debug(frames_for_vlm, prompt, debug_subdir)
-
-        t_vlm = time.perf_counter()
-        result = self._call_vlm_comprehensive(
-            vlm_input,
-            title,
-            comprehensive_context,
-            audio_context,
-            per_frame_subtitle,
-            diff_hint=diff_hint,
-        )
-        timing["vlm_api"] = time.perf_counter() - t_vlm
-
-        logger.info(f"VLM结果: 描述='{result.get('description', '')[:50]}...', 关键词='{result.get('keywords', '')[:50]}...', 耗时={timing['vlm_api']:.2f}s")
-
-        # 7. 保存分析结果
-        # 计算选中帧的时间戳
-        selected_timestamps = [
-            video_analysis["timeline"][i]["timestamp"]
-            for i in selected_indices
-            if i < len(video_analysis["timeline"])
-        ]
-
-        # 保存调试数据 - VLM响应和汇总
-        if debug_subdir:
-            self._save_debug_summary(result, video_summary, debug_subdir,
-                                     frame_timestamps=selected_timestamps)
+            # 模拟生成最终调试 prompt 和结果
+            vlm_b_prompt = self._build_comprehensive_prompt(
+                title, len(frames_for_vlm), "", audio_context, per_frame_subtitle, is_stitched=False
+            )
+            self._save_vlm_debug(frames_for_vlm, vlm_b_prompt, debug_subdir)
+            self._save_debug_summary(result, video_summary, debug_subdir, frame_timestamps=selected_timestamps)
 
         analysis_result = {
             "description": result.get("description", ""),
             "keywords": result.get("keywords", ""),
             "video_summary": video_summary,
             "selected_frames": len(selected_indices),
-            "total_analyzed": len(video_analysis["timeline"]),
+            "total_analyzed": len(timeline),
             "pose_changes": len(video_summary.get("pose_changes", [])),
             "person_ratio": video_summary.get("person_ratio", 0),
             "frames_for_vlm": frames_for_vlm,
             "frame_timestamps": selected_timestamps,
         }
 
-        # 记录调试目录路径
         if debug_subdir:
             analysis_result["debug_dir"] = str(debug_subdir)
 
@@ -406,14 +494,11 @@ class VisionProcessor:
         timing["total"] = time.perf_counter() - t_total_start
         analysis_result["timing"] = timing
 
-        # 日志输出耗时汇总
         motion_skipped = video_analysis.get("motion_skipped_count", 0)
-        yolo_inference = video_analysis.get("yolo_inference_count", len(video_analysis.get("timeline", [])))
+        yolo_inference = video_analysis.get("yolo_inference_count", len(timeline))
         logger.info(
             f"处理完成: 总耗时={timing['total']:.2f}s | "
             f"YOLO={timing.get('yolo_total', 0):.2f}s({yolo_inference}帧推理,{motion_skipped}帧跳过) | "
-            f"CLIP={timing.get('clip_diff', 0):.2f}s | "
-            f"帧选择={timing.get('frame_selection', 0):.3f}s | "
             f"VLM={timing.get('vlm_api', 0):.2f}s"
         )
 
@@ -426,7 +511,7 @@ class VisionProcessor:
         return analysis_result
 
     def _process_video_by_scenes(self, video_path: str, title: str, duration: float, audio_context: str = "", subtitle_segments: List[Dict] = None) -> Dict:
-        """场景分段分析模式：检测场景 → 逐段分析 → 合并结果"""
+        """场景分段分析模式：检测场景 → 统一进行两阶段分析 → 最终大纲识别"""
         import os
         from .scene_detector import detect_scenes, build_segments
         from ..utils.prompt_loader import get_prompt
@@ -444,7 +529,7 @@ class VisionProcessor:
             debug_subdir.mkdir(parents=True, exist_ok=True)
             logger.info(f"场景模式调试目录: {debug_subdir}")
 
-        # 场景切换点：先查缓存（按文件指纹键控），未命中才检测并写回
+        # 1. 获取场景切换点（先查缓存）
         scene_points = None
         fp_id = None
         if self.db_store is not None:
@@ -470,135 +555,247 @@ class VisionProcessor:
                     logger.debug(f"场景缓存写入失败(忽略): {e}")
 
         segments = build_segments(scene_points, duration, self.max_scenes)
-        logger.info(f"场景分段数: {len(segments)}, 将逐段分析后合并 (并发={max(1, int(self.scene_concurrent or 1))})")
+        logger.info(f"场景分段数: {len(segments)} 段 (上限 {self.max_scenes})")
 
-        scene_results = []
-
-        def _analyze_one_segment(seg_idx: int, seg_start: float, seg_end: float):
-            """分析单个场景段（独立可并发）：抽帧+YOLO+VLM，失败返回 None"""
-            seg_duration = seg_end - seg_start
-            logger.info(f"[场景 {seg_idx+1}/{len(segments)}] {seg_start:.1f}s - {seg_end:.1f}s (时长: {seg_duration:.1f}s)")
-
-            t1 = time.perf_counter()
+        # 2. 逐段执行低成本分析与 YOLO 推理
+        scene_analyses = []
+        for seg_idx, (seg_start, seg_end) in enumerate(segments):
+            logger.info(f"[场景 {seg_idx+1}/{len(segments)}] {seg_start:.1f}s - {seg_end:.1f}s")
+            t_seg = time.perf_counter()
             seg_analysis = self._analyze_video_segment(video_path, seg_start, seg_end, seg_idx, duration)
-            timing[f"scene_{seg_idx}_yolo"] = time.perf_counter() - t1
+            timing[f"scene_{seg_idx}_yolo"] = time.perf_counter() - t_seg
+            
+            if seg_analysis and "error" not in seg_analysis:
+                # 记录场景边界标记，便于后续高清细节帧选择算法中给边界帧加权
+                for entry in seg_analysis["timeline"]:
+                    if entry["index"] == 0 or entry["index"] == len(seg_analysis["timeline"]) - 1:
+                        entry["is_scene_boundary"] = True
+                    else:
+                        entry["is_scene_boundary"] = False
+                scene_analyses.append(seg_analysis)
 
-            if not seg_analysis or "error" in seg_analysis:
-                logger.warning(f"[场景 {seg_idx+1}] 分析失败，跳过")
-                return None
+        if not scene_analyses:
+            return {"error": "所有场景段分析初始化失败"}
 
-            # 保存每段的YOLO检测结果到调试目录
-            if debug_subdir:
-                seg_debug_dir = debug_subdir / f"scene_{seg_idx}"
+        # 3. 汇总所有场景段的时间线和帧记录
+        combined_timeline = []
+        combined_decoded = []
+        combined_frames = []
+        
+        # 为了计算连续变化分数，将所有解出的帧平铺
+        for seg in scene_analyses:
+            combined_timeline.extend(seg["timeline"])
+            combined_decoded.extend(seg["decoded"])
+            combined_frames.extend(seg["frames"])
+
+        # 计算跨场景平铺下的相邻帧变化分数
+        from .scene_detector import compute_frame_change_score
+        for i in range(len(combined_timeline)):
+            if i == 0:
+                combined_timeline[i]["change_score"] = 1.0
+            else:
+                prev_img = combined_decoded[i - 1]
+                curr_img = combined_decoded[i]
+                if prev_img is not None and curr_img is not None:
+                    combined_timeline[i]["change_score"] = compute_frame_change_score(prev_img, curr_img)
+                else:
+                    combined_timeline[i]["change_score"] = 0.0
+
+        # 根据是否开启 two_pass 进行分流
+        if getattr(self, "two_pass_enabled", True):
+            logger.info("[两阶段管线] 场景模式下启动统一的 VLM-A 全局分镜 + VLM-B 细节决策流程")
+
+            # 4. 两阶段：分镜拼接与一阶段全局 VLM-A 概览
+            overview_frames_for_stitch = []
+            overview_timestamps = []
+            max_overview_frames = getattr(self, "overview_max_frames", 36)
+            n_analysis_frames = len(combined_timeline)
+
+            if n_analysis_frames <= max_overview_frames:
+                overview_indices = list(range(n_analysis_frames))
+            else:
+                overview_indices = [int(x) for x in np.linspace(0, n_analysis_frames - 1, max_overview_frames)]
+
+            for idx in overview_indices:
+                img = combined_decoded[idx]
+                if img is not None:
+                    overview_frames_for_stitch.append(img)
+                    overview_timestamps.append(combined_timeline[idx]["timestamp"])
+
+            overview_json = self._call_vlm_overview(
+                overview_frames_for_stitch,
+                title,
+                timestamps=overview_timestamps
+            )
+
+            # 保存 VLM-A 调试日志
+            if debug_subdir and "raw_vlm_a_text" in overview_json:
+                (debug_subdir / "vlm_a_response.txt").write_text(overview_json["raw_vlm_a_text"], encoding="utf-8")
+
+            # 5. 二阶段细节选帧（配额制自适应：每个场景选最好的一两张，全片限制总量）
+            max_detail_images = getattr(self, "detail_max_images", 12)
+            per_scene_limit = getattr(self, "detail_per_scene", 2)
+            selected_indices = []
+            
+            # 维护全局时间线中的偏移量
+            offset = 0
+            for seg_idx, seg in enumerate(scene_analyses):
+                seg_len = len(seg["timeline"])
+                seg_timeline = combined_timeline[offset : offset + seg_len]
+                # 在单个段内筛选出最优秀的帧位置
+                seg_selected = self._select_final_detail_frames(
+                    seg_timeline,
+                    overview_json,
+                    max_images=per_scene_limit
+                )
+                # 累加偏移量转为全局索引
+                for idx in seg_selected:
+                    selected_indices.append(offset + idx)
+                offset += seg_len
+
+            # 限制最终大图数量
+            selected_indices.sort(key=lambda idx: combined_timeline[idx].get("confidence", 0.0), reverse=True)
+            selected_indices = selected_indices[:max_detail_images]
+            selected_indices.sort()  # 排回时间递增顺序
+
+            selected_timestamps = [combined_timeline[i]["timestamp"] for i in selected_indices]
+            frame_ids_for_b = [f"F{i+1:04d}" for i in selected_indices]
+
+            # 6. 高清细节帧的物理重抽（1200像素级）
+            logger.info(f"[两阶段 VLM-B] 正在重新提取场景大片中 {len(selected_timestamps)} 张高清晰度黄金细节帧...")
+            hd_parent_dir = Path(combined_frames[0]).parent / "hd_frames" if combined_frames else Path("logs/_vision_tmp") / "hd_frames"
+            hd_extracted_paths = extract_frames_cv2(
+                video_path,
+                str(hd_parent_dir),
+                selected_timestamps,
+                max_size=self.detail_max_image_size,
+                quality=self.detail_jpeg_quality
+            )
+
+            hd_frames_decoded = []
+            frames_for_vlm = []
+            aligned_timestamps = []
+            aligned_frame_ids = []
+            for idx, path in enumerate(hd_extracted_paths):
+                if path and Path(path).exists():
+                    data = np.fromfile(path, dtype=np.uint8)
+                    img = cv2.imdecode(data, cv2.IMREAD_COLOR)
+                    if img is not None:
+                        hd_frames_decoded.append(img)
+                        frames_for_vlm.append(path)
+                        aligned_timestamps.append(selected_timestamps[idx])
+                        aligned_frame_ids.append(frame_ids_for_b[idx])
+
+            if not hd_frames_decoded:
+                logger.warning("[两阶段 VLM-B] 高清抽帧失败，退化复用一阶段缓存")
+                for i in selected_indices:
+                    if i < len(combined_decoded) and combined_decoded[i] is not None:
+                        hd_frames_decoded.append(combined_decoded[i])
+                        frames_for_vlm.append(combined_frames[i])
+                        aligned_timestamps.append(combined_timeline[i]["timestamp"])
+                        aligned_frame_ids.append(f"F{i+1:04d}")
+
+            selected_timestamps = aligned_timestamps
+            frame_ids_for_b = aligned_frame_ids
+
+            # 字幕时间对应
+            per_frame_subtitle = ""
+            if subtitle_segments:
+                per_frame_subtitle = self._build_per_frame_subtitle_context(selected_timestamps, subtitle_segments)
+
+            # 7. 调用 VLM-B 细节识别与多模态最终整合
+            t_vlm = time.perf_counter()
+            result = self._call_vlm_final(
+                hd_frames_decoded,
+                title,
+                overview_json,
+                audio_context=audio_context,
+                per_frame_subtitle=per_frame_subtitle,
+                frame_ids=frame_ids_for_b,
+                timestamps=selected_timestamps
+            )
+            timing["vlm_api"] = time.perf_counter() - t_vlm
+
+        else:
+            # 兼容回退模式：使用旧的“分场景识别 + 纯文本 VLM-B 合并”逻辑
+            logger.info("[场景管线回退] 运行原有单镜头分段 VLM + 文本合并流程")
+            scene_results = []
+            
+            for seg_idx, seg in enumerate(scene_analyses):
+                seg_selected = self._select_representative_frames(
+                    seg["timeline"], max_frames=self.frames_per_scene
+                )
+                seg_timestamps = [seg["timeline"][i]["timestamp"] for i in seg_selected]
+                
+                t_vlm_seg = time.perf_counter()
+                seg_frames = [seg["decoded"][i] for i in seg_selected if i < len(seg["decoded"])]
+                seg_result = self._call_vlm_comprehensive(
+                    seg_frames,
+                    f"{title}[场景{seg_idx+1}]",
+                    seg["context"],
+                    audio_context,
+                    timestamps=seg_timestamps,
+                )
+                timing[f"scene_{seg_idx}_vlm"] = time.perf_counter() - t_vlm_seg
+                
+                scene_results.append({
+                    "index": seg_idx,
+                    "start": segments[seg_idx][0],
+                    "end": segments[seg_idx][1],
+                    "duration": segments[seg_idx][1] - segments[seg_idx][0],
+                    "description": seg_result.get("description", "分析失败"),
+                    "keywords": seg_result.get("keywords", ""),
+                    "frames": len(seg_timestamps),
+                })
+                
+            # 文本合并
+            t_merge = time.perf_counter()
+            result = self._merge_scene_descriptions(scene_results, title)
+            timing["merge_vlm"] = time.perf_counter() - t_merge
+            
+            # 回退模式没有重抽的高清帧列表，使用第一帧作为覆盖
+            selected_indices = [0]
+            selected_timestamps = [combined_timeline[0]["timestamp"]] if combined_timeline else [0.0]
+            frames_for_vlm = [combined_frames[0]] if combined_frames else []
+
+        # 8. 场景模式下重新综合计算 has_person 摘要（彻底解决硬编码为 True 的 bug）
+        has_person = any(t.get("has_person", False) for t in combined_timeline)
+        video_summary = self._generate_video_summary(combined_timeline, duration)
+        video_summary["has_person"] = has_person
+
+        # 记录调试与封面展示
+        if debug_subdir:
+            # 保存各场景 YOLO 调试信息
+            for idx, seg in enumerate(scene_analyses):
+                seg_debug_dir = debug_subdir / f"scene_{idx}"
                 seg_debug_dir.mkdir(exist_ok=True)
                 (seg_debug_dir / "detection").mkdir(exist_ok=True)
-                self._save_detection_debug(seg_analysis, seg_debug_dir)
+                self._save_detection_debug(seg, seg_debug_dir)
+            
+            # 保存最终结果大纲
+            self._save_debug_summary(result, video_summary, debug_subdir, frame_timestamps=selected_timestamps)
 
-            t2 = time.perf_counter()
-            seg_result = self._call_vlm_comprehensive(
-                seg_analysis["decoded"],
-                f"{title}[场景{seg_idx+1}]",
-                seg_analysis["context"],
-                audio_context,
-            )
-            timing[f"scene_{seg_idx}_vlm"] = time.perf_counter() - t2
-
-            # 保存每段的VLM调试数据
-            if debug_subdir:
-                seg_debug_dir = debug_subdir / f"scene_{seg_idx}"
-                (seg_debug_dir / "vlm_frames").mkdir(exist_ok=True)
-                prompt = self._build_comprehensive_prompt(
-                    f"{title}[场景{seg_idx+1}]",
-                    len(seg_analysis["frames_for_vlm"]),
-                    seg_analysis["context"],
-                    audio_context,
-                )
-                self._save_vlm_debug(seg_analysis["frames_for_vlm"], prompt, seg_debug_dir)
-                # 保存该段VLM响应
-                response_text = (
-                    f"描述: {seg_result.get('description', '')}\n"
-                    f"关键词: {seg_result.get('keywords', '')}\n"
-                )
-                (seg_debug_dir / "vlm_response.txt").write_text(response_text, encoding="utf-8")
-
-            scene_desc = seg_result.get("description", "") or seg_result.get("error", "分析失败")
-            scene_kw = seg_result.get("keywords", "")
-            logger.info(f"[场景 {seg_idx+1}] → 描述: {scene_desc[:60]}... 关键词: {scene_kw[:60]}...")
-
-            return {
-                "index": seg_idx,
-                "start": seg_start,
-                "end": seg_end,
-                "duration": seg_duration,
-                "description": scene_desc,
-                "keywords": scene_kw,
-                "frames": len(seg_analysis["frames_for_vlm"]),
-            }
-
-        scene_concurrent = max(1, int(self.scene_concurrent or 1))
-        if scene_concurrent <= 1 or len(segments) <= 1:
-            for seg_idx, (seg_start, seg_end) in enumerate(segments):
-                result = _analyze_one_segment(seg_idx, seg_start, seg_end)
-                if result is not None:
-                    scene_results.append(result)
-        else:
-            from concurrent.futures import ThreadPoolExecutor, as_completed
-            workers = min(scene_concurrent, len(segments))
-            with ThreadPoolExecutor(max_workers=workers) as ex:
-                futures = [
-                    ex.submit(_analyze_one_segment, seg_idx, seg_start, seg_end)
-                    for seg_idx, (seg_start, seg_end) in enumerate(segments)
-                ]
-                for fut in as_completed(futures):
-                    result = fut.result()
-                    if result is not None:
-                        scene_results.append(result)
-            # 按场景序号排序，保证合并顺序与串行一致
-            scene_results.sort(key=lambda r: r["index"])
-
-        if not scene_results:
-            return {"error": "所有场景分析失败"}
-
-        merged = self._merge_scene_descriptions(scene_results, title)
-        timing["merge_vlm"] = merged.get("_timing", 0)
-        timing["total"] = time.perf_counter() - t_total_start
-
-        # 保存合并结果到调试目录
-        if debug_subdir:
-            video_summary = {
-                "has_person": True,
-                "duration": duration,
-                "scenes": len(segments),
-                "scene_results": scene_results,
-            }
-            self._save_debug_summary(merged, video_summary, debug_subdir)
-            # 保存时间统计
-            (debug_subdir / "timing.json").write_text(
-                json.dumps(timing, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
-
-        logger.info(
-            f"场景分析完成: {len(segments)}段, "
-            f"总耗时={timing['total']:.2f}s, "
-            f"合并VLM={timing.get('merge_vlm', 0):.2f}s"
-        )
-
-        result = {
-            "description": merged.get("description", ""),
-            "keywords": merged.get("keywords", ""),
-            "video_summary": {
-                "has_person": True,
-                "duration": duration,
-                "scenes": len(segments),
-                "scene_results": scene_results,
-            },
-            "selected_frames": sum(s["frames"] for s in scene_results),
-            "total_analyzed": sum(s["frames"] for s in scene_results),
+        analysis_result = {
+            "description": result.get("description", ""),
+            "keywords": result.get("keywords", ""),
+            "video_summary": video_summary,
+            "selected_frames": len(selected_indices),
+            "total_analyzed": len(combined_timeline),
             "timing": timing,
+            "frames_for_vlm": frames_for_vlm,
+            "frame_timestamps": selected_timestamps,
         }
+
         if debug_subdir:
-            result["debug_dir"] = str(debug_subdir)
-        return result
+            analysis_result["debug_dir"] = str(debug_subdir)
+
+        timing["total"] = time.perf_counter() - t_total_start
+        logger.info(
+            f"场景分析完成: {len(segments)}段 | "
+            f"总耗时={timing['total']:.2f}s | "
+            f"VLM融合决策={timing.get('vlm_api', 0):.2f}s"
+        )
+        return analysis_result
 
     def _analyze_video_segment(self, video_path: str, seg_start: float, seg_end: float, seg_idx: int, video_duration: float = None) -> Dict:
         """分析单个场景段：等距取帧 → YOLO 分析"""
@@ -723,7 +920,7 @@ class VisionProcessor:
 
         timing = time.perf_counter() - t_start
 
-        if not result or result.startswith("[ERROR]"):
+        if not result or self._is_vlm_error(result):
             logger.error(f"场景合并VLM失败: {result[:100] if result else '空响应'}")
             descs = "；".join(s.get("description", "") for s in scene_results)
             kws = "，".join(s.get("keywords", "") for s in scene_results)
@@ -1017,6 +1214,43 @@ class VisionProcessor:
             "yolo_inference_count": yolo_inference_count,
         }
 
+    def _select_final_detail_frames(self, timeline: List[Dict], overview_json: Dict, max_images: int = 12) -> List[int]:
+        """结合概览推荐、检测质量和画面变化选择最终高清帧。"""
+        if not timeline:
+            return []
+        max_images = max(1, int(max_images))
+        recommended = set()
+        for value in overview_json.get("focus_frames", []) if isinstance(overview_json, dict) else []:
+            match = re.search(r"(\\d+)", str(value))
+            if match:
+                index = int(match.group(1)) - 1
+                if 0 <= index < len(timeline):
+                    recommended.add(index)
+
+        scored = []
+        for index, entry in enumerate(timeline):
+            score = 0.0
+            if index in recommended:
+                score += 100.0
+            score += float(entry.get("confidence", 0.0) or 0.0) * 30.0
+            score += min(1.0, float(entry.get("visible_keypoints", 0) or 0) / 17.0) * 20.0
+            score += float(entry.get("change_score", 0.0) or 0.0) * 20.0
+            score += float(entry.get("clip_diff_score", 0.0) or 0.0) * 20.0
+            if entry.get("is_scene_boundary"):
+                score += 15.0
+            scored.append((score, index))
+
+        # 先保证时间覆盖，再用得分填充，避免所有图片挤在同一处。
+        selected = set()
+        coverage_count = min(max_images, len(timeline))
+        for index in np.linspace(0, len(timeline) - 1, coverage_count).astype(int):
+            selected.add(int(index))
+        for _, index in sorted(scored, reverse=True):
+            if len(selected) >= max_images:
+                break
+            selected.add(index)
+        return sorted(selected)
+
     def _select_representative_frames(self, timeline: List[Dict], max_frames: int = 10, clip_diff_scores: list = None) -> List[int]:
         """
         分区段选择代表性帧：将采样帧等分为 max_frames 个区段，
@@ -1215,12 +1449,45 @@ class VisionProcessor:
             return image_array_to_base64(item, max_size=self.max_image_size)
         return image_to_base64(item, max_size=self.max_image_size)
 
-    def _call_vlm_comprehensive(self, frames, title: str, context: str = "", audio_context: str = "", per_frame_subtitle: str = "", diff_hint: str = "") -> Dict:
+    def _call_vlm_comprehensive(self, frames, title: str, context: str = "", audio_context: str = "", per_frame_subtitle: str = "", diff_hint: str = "", timestamps: List[float] = None) -> Dict:
         """调用VLM - 全面分析模式，失败重试一次"""
         if not frames:
             return {"error": "无可用帧（所有帧提取失败）"}
 
-        prompt = self._build_comprehensive_prompt(title, len(frames), context, audio_context, per_frame_subtitle, diff_hint=diff_hint)
+        is_stitched = False
+        original_frame_count = len(frames)
+
+        # 图像智能网格拼接优化
+        if getattr(self, "stitch_enabled", False):
+            grid_str = getattr(self, "stitch_grid", "2x2")
+            try:
+                r, c = map(int, grid_str.lower().split("x"))
+                grid_shape = (r, c)
+            except Exception:
+                grid_shape = (2, 2)
+            
+            from ..utils.image import stitch_images
+            stitched_frames = stitch_images(
+                frames,
+                grid_shape=grid_shape,
+                sub_max_size=400,
+                draw_labels=True,
+                timestamps=timestamps
+            )
+            if stitched_frames:
+                logger.info(f"[图像拼接] 已将 {len(frames)} 张采样帧拼接为 {len(stitched_frames)} 张 {grid_shape[0]}x{grid_shape[1]} 网格图发送")
+                frames = stitched_frames
+                is_stitched = True
+
+        prompt = self._build_comprehensive_prompt(
+            title,
+            original_frame_count if not is_stitched else (len(timestamps) if timestamps else original_frame_count),
+            context,
+            audio_context,
+            per_frame_subtitle,
+            diff_hint=diff_hint,
+            is_stitched=is_stitched
+        )
 
         images_b64 = [self._to_base64_item(f) for f in frames]
         result = call_vision_api(
@@ -1229,7 +1496,7 @@ class VisionProcessor:
         )
 
         # 失败时重试一次（同样帧数）
-        if result.startswith("[ERROR]") or not result.strip():
+        if self._is_vlm_error(result) or not result.strip():
             logger.warning(f"VLM调用失败，重试一次: {len(frames)}帧")
             result = call_vision_api(
                 self.provider, images_b64, prompt,
@@ -1240,7 +1507,7 @@ class VisionProcessor:
         logger.debug(f"VLM响应: {result[:500] if result else '空'}")
 
         # 检查VLM调用是否失败
-        if not result or result.startswith("[ERROR]"):
+        if not result or self._is_vlm_error(result):
             error_msg = f"VLM调用失败: {result[:100] if result else '空响应'}"
             logger.error(error_msg)
             return {"error": error_msg}
@@ -1275,6 +1542,275 @@ class VisionProcessor:
         # 最终检查：如果关键词仍为空，返回错误
         if not parsed.get("keywords"):
             error_msg = "VLM返回关键词为空（已重试）"
+            logger.error(error_msg)
+            return {"error": error_msg}
+
+        return parsed
+
+    @staticmethod
+    def _is_vlm_error(text: str) -> bool:
+        """识别供应商返回的错误文本，兼容中英文错误前缀。"""
+        if not text:
+            return True
+        normalized = text.lstrip().upper()
+        return normalized.startswith(("[ERROR]", "[错误]"))
+
+    def _parse_json_safely(self, text: str) -> dict:
+        """从 VLM 响应中安全提取并解析 JSON 结构"""
+        if not text:
+            return {}
+        try:
+            return json.loads(text.strip())
+        except Exception:
+            pass
+        
+        try:
+            match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL | re.IGNORECASE)
+            if match:
+                return json.loads(match.group(1).strip())
+        except Exception:
+            pass
+            
+        try:
+            start = text.find("{")
+            end = text.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                return json.loads(text[start:end+1].strip())
+        except Exception:
+            pass
+            
+        return {}
+
+    def _call_vlm_overview(self, frames: List[Union[str, np.ndarray]], title: str, timestamps: List[float] = None) -> Dict:
+        """
+        第一阶段 VLM-A：全局分镜概览。
+        将彩色低分辨率分析帧通过网格拼接，向 VLM-A 发起一次多图请求，分析全局连续时序，
+        并推荐高清细节识别所需的黄金重点帧编号。
+        """
+        if not frames:
+            return {"overview": "无可用帧", "segments": [], "focus_frames": []}
+
+        # 1. 生成全局唯一的帧编号列表：F0001, F0002...
+        frame_ids = [f"F{i+1:04d}" for i in range(len(frames))]
+
+        # 2. 调用 stitch_images 进行 3x3 (或配置大小) 分镜网格拼接
+        try:
+            grid_str = getattr(self, "overview_grid", "3x3")
+            r, c = map(int, grid_str.lower().split("x"))
+            grid_shape = (r, c)
+        except Exception:
+            grid_shape = (3, 3)
+
+        from ..utils.image import stitch_images
+        stitched_canvases = stitch_images(
+            frames,
+            grid_shape=grid_shape,
+            sub_max_size=400,
+            draw_labels=True,
+            timestamps=timestamps,
+            frame_ids=frame_ids
+        )
+
+        if not stitched_canvases:
+            logger.warning("VLM-A 分镜图拼接失败，退化为无图像概览")
+            return {"overview": "拼接失败", "segments": [], "focus_frames": []}
+
+        # 限制概览总页数
+        max_pages = getattr(self, "overview_max_pages", 6)
+        stitched_canvases = stitched_canvases[:max_pages]
+        logger.info(f"[两阶段 VLM-A] 成功拼装 {len(frames)} 采样帧为 {len(stitched_canvases)} 页 {grid_shape[0]}x{grid_shape[1]} 网格分镜图")
+
+        # 3. 构造 VLM-A 专用提示词
+        from ..utils.prompt_loader import get_prompt
+        prompt = (
+            f"{get_prompt('vision_overview', 'system_header')}\n\n"
+            f"视频/媒体标题: {title}\n"
+            f"总采样帧数: {len(frames)} 帧（标签标号为 F0001 到 F{len(frames):04d}）\n\n"
+            f"{get_prompt('vision_overview', 'task_instruction')}\n\n"
+            f"{get_prompt('vision_overview', 'output_format')}"
+        )
+
+        # 4. 转换拼接图像为 Base64（采用 overview 特定的质量和最长边）
+        images_b64 = []
+        for canvas in stitched_canvases:
+            b64 = image_array_to_base64(
+                canvas,
+                max_size=self.overview_max_image_size,
+                quality=self.overview_jpeg_quality
+            )
+            if b64:
+                images_b64.append(b64)
+
+        if not images_b64:
+            return {"overview": "图像编码失败", "segments": [], "focus_frames": []}
+
+        # 5. 调用云端 VLM 接口
+        logger.info(f"[两阶段 VLM-A] 正在调用大模型进行分镜概览...")
+        result_text = call_vision_api(
+            self.provider, images_b64, prompt,
+            model=self.model, api_key=self.api_key
+        )
+
+        # 失败时重试一次
+        if result_text.startswith("[ERROR]") or not result_text.strip():
+            logger.warning("[两阶段 VLM-A] 接口失败，执行一次同 payload 重试")
+            result_text = call_vision_api(
+                self.provider, images_b64, prompt,
+                model=self.model, api_key=self.api_key
+            )
+
+        if not result_text or result_text.startswith("[ERROR]"):
+            logger.error(f"[两阶段 VLM-A] 调用彻底失败: {result_text}")
+            return {"overview": f"VLM-A 失败: {result_text}", "segments": [], "focus_frames": []}
+
+        # 6. 安全、强力解析结构化 JSON
+        parsed_json = self._parse_json_safely(result_text)
+        
+        # 兼容性清洗推荐的重点帧格式
+        focus_frames = parsed_json.get("focus_frames", [])
+        clean_focus_frames = []
+        for f in focus_frames:
+            if isinstance(f, str):
+                num_match = re.search(r"(\d+)", f)
+                if num_match:
+                    clean_focus_frames.append(f"F{int(num_match.group(1)):04d}")
+        
+        parsed_json["raw_vlm_a_text"] = result_text
+        parsed_json["focus_frames"] = clean_focus_frames
+        
+        logger.info(f"[两阶段 VLM-A] 概览分析完成，模型共推荐了 {len(clean_focus_frames)} 个高清细节帧: {clean_focus_frames}")
+        return parsed_json
+
+    def _call_vlm_final(
+        self,
+        frames: List[Union[str, np.ndarray]],
+        title: str,
+        overview_json: Dict,
+        audio_context: str = "",
+        per_frame_subtitle: str = "",
+        frame_ids: List[str] = None,
+        timestamps: List[float] = None
+    ) -> Dict:
+        """
+        第二阶段 VLM-B：细节深度识别及多模态最终整合。
+        接收少量高清独立图，并读取 VLM-A 概览上下文、音频文本和 YOLO 信息进行终极决策。
+        """
+        if not frames:
+            return {"error": "高清细节帧抽取失败"}
+
+        # 1. 构造极其详实的多模态最终整合 Prompt
+        from ..utils.prompt_loader import get_prompt
+        
+        # 组装 VLM-A 上下文文本
+        vlm_a_text = overview_json.get("raw_vlm_a_text", "")
+        if not vlm_a_text:
+            vlm_a_text = f"全局概述: {overview_json.get('overview', '未知')}"
+            
+        overview_section = f"""
+
+【VLM-A 全局时序分镜概览】
+{vlm_a_text}
+（上文为 VLM-A 基于连续分镜图对整部视频时序流动、镜头切换的大纲评估。高清细节请以当前图片为核心，如有逻辑冲突，以高清大图为准。）"""
+
+        # 组装黄金细节帧元数据清单（对应传入多张独立图片的说明）
+        fids = frame_ids or [f"F{i+1:04d}" for i in range(len(frames))]
+        meta_lines = []
+        for i, fid in enumerate(fids):
+            ts = timestamps[i] if (timestamps and i < len(timestamps)) else 0.0
+            meta_lines.append(f"- 独立高清图片 {i+1}：对应全局帧 ID {fid}，时间戳为 {ts:.1f} 秒")
+        meta_section = "\n".join(meta_lines)
+
+        audio_section = ""
+        if audio_context:
+            audio_section = f"\n\n【音频转录上下文】\n{audio_context}"
+
+        subtitle_section = ""
+        if per_frame_subtitle:
+            subtitle_section = f"\n\n【细节帧对应的字幕音频转录时间段】\n{per_frame_subtitle}"
+
+        prompt = f"""{get_prompt('vision_final_video', 'system_header')}
+
+你现在执行 VLM-B 最终细节融合推理。分析媒体文件 "{title}"。
+
+【输入高清细节帧清单】
+{meta_section}
+{overview_section}{audio_section}{subtitle_section}
+
+【任务说明】
+{get_prompt('vision_final_video', 'task_instruction')}
+
+【输出要求】
+{get_prompt('vision_final_video', 'output_format')}
+
+格式：
+描述：xxx
+关键词：xxx, xxx, xxx"""
+
+        # 2. 转换高清图像为 base64
+        images_b64 = []
+        for f in frames:
+            if isinstance(f, np.ndarray):
+                b64 = image_array_to_base64(
+                    f,
+                    max_size=self.detail_max_image_size,
+                    quality=self.detail_jpeg_quality
+                )
+            else:
+                b64 = image_to_base64(
+                    f,
+                    max_size=self.detail_max_image_size,
+                    quality=self.detail_jpeg_quality
+                )
+            if b64:
+                images_b64.append(b64)
+
+        if not images_b64:
+            return {"error": "高清细节图 Base64 编码失败"}
+
+        # 3. 调用最终决策接口
+        logger.info(f"[两阶段 VLM-B] 正在调用大模型认读 {len(images_b64)} 张高清单图并做最终统筹决策...")
+        result_text = call_vision_api(
+            self.provider, images_b64, prompt,
+            model=self.model, api_key=self.api_key
+        )
+
+        # 失败重试
+        if result_text.startswith("[ERROR]") or not result_text.strip():
+            logger.warning("[两阶段 VLM-B] 调用失败，执行同高清 payload 重试")
+            result_text = call_vision_api(
+                self.provider, images_b64, prompt,
+                model=self.model, api_key=self.api_key
+            )
+
+        if not result_text or result_text.startswith("[ERROR]"):
+            logger.error(f"[两阶段 VLM-B] 调用彻底失败: {result_text}")
+            return {"error": f"VLM-B 最终统筹失败: {result_text}"}
+
+        # 4. 解析结果
+        parsed = self._parse_vision_response(result_text)
+
+        # 关键词为空时重试一次
+        if not parsed.get("keywords"):
+            logger.warning("[两阶段 VLM-B] 返回关键词为空，使用强调指令重试")
+            retry_prompt = (
+                f"{get_prompt('vision_retry_video', 'system_header')}\n\n"
+                f'分析高清细节帧，结合前文概览，最终输出标题和关键词。媒体名称 "{title}"。\n\n'
+                f"{get_prompt('vision_retry_video', 'task_instruction')}\n"
+                f"{get_prompt('vision_retry_video', 'output_format')}"
+            )
+            images_b64_retry = images_b64[:5]
+            result_retry = call_vision_api(
+                self.provider, images_b64_retry, retry_prompt,
+                model=self.model, api_key=self.api_key
+            )
+            if result_retry and not result_retry.startswith("[ERROR]"):
+                parsed_retry = self._parse_vision_response(result_retry)
+                if parsed_retry.get("keywords"):
+                    logger.info("[两阶段 VLM-B] 关键词重试提取成功")
+                    return parsed_retry
+
+        if not parsed.get("keywords"):
+            error_msg = "[两阶段 VLM-B] 返回关键词为空（已重试）"
             logger.error(error_msg)
             return {"error": error_msg}
 
@@ -1362,7 +1898,7 @@ class VisionProcessor:
 
         logger.info(f"调试汇总已保存")
 
-    def _build_comprehensive_prompt(self, title: str, n_frames: int, context: str, audio_context: str = "", per_frame_subtitle: str = "", diff_hint: str = "") -> str:
+    def _build_comprehensive_prompt(self, title: str, n_frames: int, context: str, audio_context: str = "", per_frame_subtitle: str = "", diff_hint: str = "", is_stitched: bool = False) -> str:
         """构建全面分析提示词"""
         
         # 构建音频上下文部分
@@ -1390,9 +1926,15 @@ class VisionProcessor:
 【帧差异度提示】
 {diff_hint}"""
 
+        # 拼接提示说明
+        stitch_hint = ""
+        if is_stitched:
+            grid_str = getattr(self, "stitch_grid", "2x2")
+            stitch_hint = f"\n（注：这 {n_frames} 个关键帧已被拼装在 {grid_str} 的网格大图中发送，每个子画面左上角标有对应的帧序号，如 #1, #2 等）"
+
         return f"""{get_prompt('vision_video', 'system_header')}
 
-分析媒体文件 "{title}" 的{n_frames}个关键帧。
+分析媒体文件 "{title}" 的{n_frames}个关键帧。{stitch_hint}
 
 {context}{diff_section}{audio_section}{subtitle_section}
 

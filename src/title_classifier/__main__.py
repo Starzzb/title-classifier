@@ -204,6 +204,7 @@ def cmd_vision(args):
         scene_threshold=args.scene_threshold,
         max_scenes=args.max_scenes,
         frames_per_scene=args.frames_per_scene,
+        scene_concurrent=args.scene_concurrent,
     )
 
     if not processor.initialize():
@@ -268,8 +269,13 @@ def cmd_vision(args):
     # SRT输出目录
     srt_dir = str(csv_path.parent / "subtitles")
 
-    # 并发数
-    max_workers = min(getattr(args, "concurrent", 1), len(pending))
+    # 并发数：显式 --concurrent 优先；否则取 [vision] concurrent 配置（GPU 不自动降级，由用户决定）
+    if getattr(args, "concurrent", None) is not None:
+        max_workers = args.concurrent
+    else:
+        from .utils.config import load_merged_config, get_config_value
+        max_workers = get_config_value(load_merged_config(), "vision.concurrent", 4)
+    max_workers = min(max_workers, len(pending))
     if max_workers < 1:
         max_workers = 1
 
@@ -278,6 +284,14 @@ def cmd_vision(args):
     lock = threading.Lock()
     counter = {"success": 0, "failed": 0, "done": 0}
     total = len(pending)
+
+    # 智能写入频率策略
+    if total <= 5:
+        flush_interval = 1  # 实时全量刷写
+    elif total <= 50:
+        flush_interval = max(2, total // 5)  # 中等任务平均写盘 5 次左右
+    else:
+        flush_interval = 10  # 超大任务每 10 条刷盘一次
 
     def process_one(idx, row_idx, row):
         """处理单个视频（线程安全）"""
@@ -317,9 +331,12 @@ def cmd_vision(args):
                     counter["failed"] += 1
                     rows[row_idx]["vision_failed"] = "true"
                     print(f"  [错误] {result['error']}")
-                    # 保存失败标记到CSV
-                    atomic_write_csv, _ = _import_atomic_csv()
-                    atomic_write_csv(csv_path, rows, fieldnames)
+                    
+                    # 智能频率写盘
+                    completed_count = counter["success"] + counter["failed"]
+                    if (completed_count == total) or (completed_count % flush_interval == 0):
+                        atomic_write_csv, _ = _import_atomic_csv()
+                        atomic_write_csv(csv_path, rows, fieldnames)
                 return
 
             with lock:
@@ -353,14 +370,23 @@ def cmd_vision(args):
                 if args.debug and result.get("debug_dir"):
                     print(f"  [调试] 数据已保存: {result['debug_dir']}")
 
-                # 每处理完一条立即保存CSV
-                atomic_write_csv, _ = _import_atomic_csv()
-                atomic_write_csv(csv_path, rows, fieldnames)
+                # 智能频率写盘
+                completed_count = counter["success"] + counter["failed"]
+                if (completed_count == total) or (completed_count % flush_interval == 0):
+                    atomic_write_csv, _ = _import_atomic_csv()
+                    atomic_write_csv(csv_path, rows, fieldnames)
 
         except Exception as e:
             with lock:
                 counter["failed"] += 1
+                rows[row_idx]["vision_failed"] = "true"
                 print(f"  [错误] {e}")
+                
+                # 智能频率写盘
+                completed_count = counter["success"] + counter["failed"]
+                if (completed_count == total) or (completed_count % flush_interval == 0):
+                    atomic_write_csv, _ = _import_atomic_csv()
+                    atomic_write_csv(csv_path, rows, fieldnames)
 
     # 执行
     if max_workers > 1:
@@ -381,6 +407,11 @@ def cmd_vision(args):
     else:
         for idx, (row_idx, row) in enumerate(pending):
             process_one(idx, row_idx, row)
+
+    # 最终强制全量保存 CSV，确保无缓冲遗留
+    print(f"\n[CSV智能写盘] 正在进行最终全量保存...")
+    atomic_write_csv, _ = _import_atomic_csv()
+    atomic_write_csv(csv_path, rows, fieldnames)
 
     print(f"\n[统计]")
     print(f"  成功: {counter['success']}")
@@ -754,7 +785,7 @@ def main():
     vision_cmd.add_argument("--analysis-step", type=float, default=gv("vision.analysis_step", 5.0), help="YOLO模式采样间隔（秒，默认5秒）")
     vision_cmd.add_argument("--max-sample-frames", type=int, default=gv("vision.max_sample_frames", 50), help="最大采样帧数上限（默认50，超过此数会均匀分布到整个视频）")
     vision_cmd.add_argument("--device", default=gv("general.device", "cpu"), choices=["auto", "cuda", "cpu"], help="推理设备（cpu=默认, auto=自动检测, cuda=GPU需手动安装CUDA版PyTorch）")
-    vision_cmd.add_argument("--concurrent", type=int, default=4, help="并发处理视频数（默认4，CPU多核并行）")
+    vision_cmd.add_argument("--concurrent", type=int, default=None, help="并发处理视频数（默认取 [vision] concurrent 配置，通常为4）")
     vision_cmd.add_argument("--backend", default=gv("yolo.backend", "auto"), choices=["auto", "openvino", "pytorch"], help="YOLO推理后端（auto=自动检测, openvino=Intel/AMD CPU加速, pytorch=原始PyTorch）")
     vision_cmd.add_argument("--no-motion-detection", action="store_true", help="禁用运动检测前置过滤（默认启用）")
     vision_cmd.add_argument("--motion-threshold", type=float, default=gv("vision.motion_threshold", 8.0), help="运动检测阈值（变化像素比例%%，低于此值跳过YOLO推理，默认8.0）")
@@ -762,6 +793,7 @@ def main():
     vision_cmd.add_argument("--scene-threshold", type=float, default=gv("scene_detection.threshold", 0.3), help="场景检测敏感度（0-1，越低切得越碎，默认0.3）")
     vision_cmd.add_argument("--max-scenes", type=int, default=gv("scene_detection.max_scenes", 10), help="最大场景段数（默认10，超出则合并相邻小场景）")
     vision_cmd.add_argument("--frames-per-scene", type=int, default=gv("scene_detection.frames_per_scene", 10), help="每场景取帧数（默认10）")
+    vision_cmd.add_argument("--scene-concurrent", type=int, default=gv("scene_detection.concurrent", 3), help="逐场景段并发分析数（默认3；机械硬盘/USB外置盘建议1，串行避免寻道）")
     vision_cmd.add_argument("--all", action="store_true", help="处理所有未识别的文件")
     vision_cmd.add_argument("--debug", action="store_true", help="启用调试模式，保存检测结果和VLM输入输出")
     vision_cmd.add_argument("--debug-dir", default="data/debug", help="调试数据输出目录")

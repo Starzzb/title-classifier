@@ -159,3 +159,49 @@ def get_segments(video_path: str, duration: float, threshold: float = 0.3, max_s
     """
     scene_points = detect_scenes(video_path, threshold, sample_interval)
     return build_segments(scene_points, duration, max_scenes)
+
+
+def compute_frame_change_score(frame1: np.ndarray, frame2: np.ndarray) -> float:
+    """
+    低成本计算相邻两帧画面的综合变化分数。
+    综合三个层面的变化：
+    1. HSV 直方图差异（55%）：捕获色彩和硬切变动；
+    2. 灰度缩小图差值（30%）：捕获构图、镜头推进和主体运动；
+    3. 边缘结构差异（15%）：捕获细节轮廓形态变化。
+    
+    Returns:
+        float: 归一化的变化分数（0.0 到 1.0）
+    """
+    if frame1 is None or frame2 is None:
+        return 0.0
+    
+    try:
+        # 1. HSV 直方图差（主信号）
+        hist1 = _frame_hist(frame1)
+        hist2 = _frame_hist(frame2)
+        hsv_diff = cv2.compareHist(hist1, hist2, cv2.HISTCMP_BHATTACHARYYA)
+        
+        # 2. 灰度结构差 (缩微图的平均绝对差)
+        g1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
+        g2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
+        g1_mini = cv2.resize(g1, (160, 90), interpolation=cv2.INTER_AREA)
+        g2_mini = cv2.resize(g2, (160, 90), interpolation=cv2.INTER_AREA)
+        # 高斯平滑
+        g1_mini = cv2.GaussianBlur(g1_mini, (5, 5), 0)
+        g2_mini = cv2.GaussianBlur(g2_mini, (5, 5), 0)
+        
+        abs_diff = cv2.absdiff(g1_mini, g2_mini)
+        mean_gray_diff = float(np.mean(abs_diff)) / 255.0
+        
+        # 3. 边缘结构差
+        edge1 = cv2.Canny(g1_mini, 50, 150)
+        edge2 = cv2.Canny(g2_mini, 50, 150)
+        edge_diff = float(np.mean(cv2.absdiff(edge1, edge2))) / 255.0
+        
+        # 4. 加权合并
+        score = 0.55 * hsv_diff + 0.30 * mean_gray_diff + 0.15 * edge_diff
+        return min(1.0, max(0.0, score))
+    except Exception as e:
+        logger.warning(f"计算画面变化分数失败: {e}")
+        return 0.0
+
