@@ -1,5 +1,5 @@
 ;!@Install@!UTF-8!
-Title="Title Classifier v8.1.0"
+Title="Title Classifier v8.3.1"
 BeginPrompt="Do you want to install Title Classifier?"
 RunProgram="%%T\title-classifier.exe"
 Directory="%%S\title-classifier"

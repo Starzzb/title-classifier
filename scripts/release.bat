@@ -9,7 +9,7 @@ echo.
 set PROJECT_DIR=%~dp0..
 set RELEASE_DIR=%PROJECT_DIR%\release
 set DIST_DIR=%PROJECT_DIR%\dist\title-classifier
-set VERSION=8.1.0
+set VERSION=8.3.1
 set OUTPUT_NAME=title-classifier-v%VERSION%-win64
 set SZIP=D:\scoop\apps\7zip\current\7z.exe
 set SFX=D:\scoop\apps\7zip\current\7z.sfx

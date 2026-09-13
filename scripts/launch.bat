@@ -3,7 +3,7 @@ REM title-classifier 启动脚本
 REM 双击运行此文件启动 title-classifier
 
 echo ========================================
-echo   Title Classifier v8.1.0
+echo   Title Classifier v8.3.1
 echo ========================================
 echo.
 

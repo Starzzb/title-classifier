@@ -1,6 +1,5 @@
 """Stage1c 视觉识别 Tab - 从主窗口提取的独立组件"""
 
-import os
 import sys
 import threading
 import tkinter as tk
@@ -212,6 +211,19 @@ class StageVisionTab(ttk.Frame):
         fps_entry.pack(side=tk.LEFT, padx=2)
         ToolTip(fps_entry, "每个场景段发送给VLM分析的帧数，默认10帧。\n实际推理帧数按 min(每段帧数, 时长/0.5) 动态计算，可能多于发送帧数。")
 
+        row4b = ttk.Frame(parent)
+        row4b.pack(fill=tk.X, padx=4, pady=2)
+        ttk.Label(row4b, text="视频并发:").pack(side=tk.LEFT, padx=(4, 2))
+        self.s1c_video_concurrent_var = tk.StringVar(value=str(self._gv("vision.concurrent", 4)))
+        vc_entry = ttk.Entry(row4b, textvariable=self.s1c_video_concurrent_var, width=4)
+        vc_entry.pack(side=tk.LEFT, padx=2)
+        ToolTip(vc_entry, "同时处理的视频数（视频间并发），默认取配置 [vision] concurrent=4。\nGPU 下YOLO推理仍自动串行（_gpu_lock），并发收益在抽帧/解码/VLM等待重叠，显存占用随并发上升；\n机械硬盘/USB外置盘建议设 1，避免多条磁盘流互相寻道。")
+        ttk.Label(row4b, text="段并发（机械/USB盘建议 1）:").pack(side=tk.LEFT, padx=(8, 2))
+        self.s1c_scene_concurrent_var = tk.StringVar(value=str(self._gv("scene_detection.concurrent", 3)))
+        sc_entry = ttk.Entry(row4b, textvariable=self.s1c_scene_concurrent_var, width=4)
+        sc_entry.pack(side=tk.LEFT, padx=2)
+        ToolTip(sc_entry, "场景段并发分析路数，默认3。\n机械硬盘/USB外置盘/网络盘建议设 1：串行单流独占磁盘带宽，避免多流寻道反而更慢；\nSSD/NVMe 可保持 2-3：抽帧解码与 VLM 网络等待重叠，吞吐更高。\nGPU 推理始终自动串行，不受此项影响。详见 FAQ Q25。")
+
     def _build_mux_section(self, parent):
         """字幕封装折叠区"""
         ttk.Label(parent, text="需要先运行音频识别产出字幕文件", foreground="blue", font=("Microsoft YaHei", 8)).pack(fill=tk.X, padx=4, pady=2)
@@ -277,13 +289,10 @@ class StageVisionTab(ttk.Frame):
         if backend and backend != "auto":
             cmd.extend(["--backend", backend])
 
-        # 并发数：根据设备自动调整
-        if device == "cuda":
-            cmd.extend(["--concurrent", "1"])  # GPU串行，避免CUDA死锁
-        elif device == "cpu":
-            cpu_workers = min(os.cpu_count() - 1, 4)
-            cmd.extend(["--concurrent", str(cpu_workers)])  # CPU多核并行
-        # auto模式不传concurrent，让CLI自动决定
+        # 并发数：显式传参 > [vision] concurrent 配置（GPU 不自动降级，由用户决定）
+        video_conc = self.s1c_video_concurrent_var.get()
+        if video_conc and video_conc != str(gv("vision.concurrent", 4)):
+            cmd.extend(["--concurrent", video_conc])
 
         # 全面分析模式
         if self.s1c_comprehensive_var.get():
@@ -336,6 +345,9 @@ class StageVisionTab(ttk.Frame):
             frames_per = self.s1c_frames_per_scene_var.get()
             if frames_per and frames_per != str(gv("scene_detection.frames_per_scene", 10)):
                 cmd.extend(["--frames-per-scene", frames_per])
+            scene_conc = self.s1c_scene_concurrent_var.get()
+            if scene_conc and scene_conc != str(gv("scene_detection.concurrent", 3)):
+                cmd.extend(["--scene-concurrent", scene_conc])
 
         if self.s1c_all_var.get():
             cmd.append("--all")
@@ -379,12 +391,10 @@ class StageVisionTab(ttk.Frame):
         if backend and backend != "auto":
             cmd.extend(["--backend", backend])
 
-        # 并发数：根据设备自动调整
-        if device == "cuda":
-            cmd.extend(["--concurrent", "1"])
-        elif device == "cpu":
-            cpu_workers = min(os.cpu_count() - 1, 4)
-            cmd.extend(["--concurrent", str(cpu_workers)])
+        # 并发数：显式传参 > [vision] concurrent 配置（GPU 不自动降级，由用户决定）
+        video_conc = self.s1c_video_concurrent_var.get()
+        if video_conc and video_conc != str(gv("vision.concurrent", 4)):
+            cmd.extend(["--concurrent", video_conc])
 
         # 全面分析模式
         if self.s1c_comprehensive_var.get():
@@ -411,6 +421,9 @@ class StageVisionTab(ttk.Frame):
             frames_per = self.s1c_frames_per_scene_var.get()
             if frames_per and frames_per != str(gv("scene_detection.frames_per_scene", 10)):
                 cmd.extend(["--frames-per-scene", frames_per])
+            scene_conc = self.s1c_scene_concurrent_var.get()
+            if scene_conc and scene_conc != str(gv("scene_detection.concurrent", 3)):
+                cmd.extend(["--scene-concurrent", scene_conc])
 
         # 添加分析参数
         analysis_step = self.s1c_analysis_step_var.get()

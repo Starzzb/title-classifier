@@ -346,13 +346,14 @@ uv run title-classifier vision [选项]
 | `--max-sample-frames` | 采样帧数上限（默认50，超出均匀分布） |
 | `--device` | 推理设备（auto/cuda/cpu，默认读配置；auto=有GPU用CUDA） |
 | `--backend` | YOLO后端（auto/openvino/pytorch，默认auto） |
-| `--concurrent` | 并发处理视频数（默认4） |
+| `--concurrent` | 并发处理视频数（默认取 [vision] concurrent=4；GPU 下推理自动串行） |
 | `--no-motion-detection` | 禁用运动检测前置过滤 |
 | `--motion-threshold` | 运动检测阈值%（默认10.0） |
 | `--no-scene-detection` | 禁用场景切分 |
 | `--scene-threshold` | 场景切分阈值0-1（默认0.3） |
 | `--max-scenes` | 最大场景数（默认10） |
 | `--frames-per-scene` | 每场景抽帧数（默认10） |
+| `--scene-concurrent` | 段并发分析数（默认3，机械硬盘/USB外置盘建议1串行） |
 | `--retry-failed` | 重试之前失败的行（vision_failed=true） |
 | `--all` | 处理所有未识别文件 |
 | `--auto-import` | 完成后自动导入数据库 |
@@ -1372,9 +1373,10 @@ uv run title-classifier vision -c "data/output/Movies/title_review.csv" --use-yo
 
 当VLM API调用失败时（超时、限流、空响应），系统会：
 
-1. **重试一次**：同样帧数，同样参数
-2. **仍失败则标记**：CSV中 `vision_failed` 列设为 `true`
-3. **跳过失败行**：默认视觉识别会跳过 `vision_failed=true` 的行
+1. **限流（429）全局退避**：触发全进程共享的熔断窗口（4→8→16→32→60s 封顶），所有并发调用一起等待，结束后节流依次放行；限流重试独立计数（单次调用最多 6 次），不消耗普通重试次数
+2. **其它失败重试一次**：超时、空响应等计入普通重试次数，同样帧数、同样参数
+3. **仍失败则标记**：CSV中 `vision_failed` 列设为 `true`
+4. **跳过失败行**：默认视觉识别会跳过 `vision_failed=true` 的行
 
 **CLI重试失败行：**
 ```bash
@@ -1661,6 +1663,15 @@ uv run title-classifier vision --all -p gcli
 - 场景切换点缓存：按文件指纹+阈值+采样间隔键控存入 `scene_cache` 表，重跑检测成本归零
 - 检测轻量化：>1080p 帧降采样后算直方图；`sample_interval` 可配置
 - 实测否决记录：并行分块解码无收益（cv2 ffmpeg 后端全局锁，多线程负加速；多进程分块无收益），全片解码已是 libav 物理极限
+
+**修复：VLM 429 限流全局指数退避**
+
+- 限流（429）重试独立计数（单次调用最多容忍 6 次连续 429），不消耗普通重试次数
+- 全进程共享退避（`vision_rate_limiter` 单例）：任一 worker 撞 429，全体进入熔断窗口（4→8→16→32→60s 封顶），结束后按发车节流依次放行防惊群；调用成功即清零
+
+**修复：backfill_from_srt 递归收集**
+
+- 回填脚本改为递归收集子目录中的 SRT，覆盖顶层 `data/output/subtitles` 目录
 
 ### v8.3.0
 

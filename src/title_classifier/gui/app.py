@@ -17,6 +17,7 @@ from ..providers import (
     check_provider_availability, get_provider_display_name,
     get_providers_for_gui, call_text_api, test_provider_connection,
 )
+from .. import __version__
 from ..core.refiner import Refiner
 from ..utils.muxer import SubtitleMuxer
 from ..utils.file_resolve import resolve_media_path
@@ -103,7 +104,7 @@ class TitleClassifierApp(ttk.Window):
         config = load_merged_config()
         self.current_theme = get_config_value(config, "theme.name", DEFAULT_THEME)
 
-        super().__init__(title="视频标题分类工具 v8.1", themename=self.current_theme)
+        super().__init__(title=f"视频标题分类工具 v{__version__}", themename=self.current_theme)
         self.geometry("900x850")
         self.minsize(800, 700)
 

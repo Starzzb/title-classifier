@@ -1,6 +1,6 @@
 # title-classifier CLI 参考手册
 
-版本：8.1.0  
+版本：8.3.1  
 入口：`python -m title-classifier <command> [options]`  
 打包后：`title-classifier <command>`（自动启动 GUI）或 `title-classifier-gui`
 
@@ -150,7 +150,7 @@ python -m title-classifier vision -c <csv> [options]
 | `--analysis-step` | float | 5.0 | YOLO 模式采样间隔（秒） |
 | `--max-sample-frames` | int | 50 | 最大采样帧数上限 |
 | `--device` | str | `auto` | 推理设备：`auto` / `cuda` / `cpu` |
-| `--concurrent` | int | 4 | 并发处理视频数 |
+| `--concurrent` | int | `[vision] concurrent`（4） | 并发处理视频数；GPU 下推理仍自动串行，显存占用随并发上升 |
 | `--backend` | str | `openvino` | YOLO 后端：`auto` / `openvino` / `pytorch` |
 | `--no-motion-detection` | flag | false | 禁用运动检测前置过滤 |
 | `--motion-threshold` | float | 10.0 | 运动检测阈值（变化像素比例 %） |
@@ -158,6 +158,7 @@ python -m title-classifier vision -c <csv> [options]
 | `--scene-threshold` | float | 0.3 | 场景检测敏感度（0-1，越低切得越碎） |
 | `--max-scenes` | int | 10 | 最大场景段数 |
 | `--frames-per-scene` | int | 10 | 每场景取帧数 |
+| `--scene-concurrent` | int | 3 | 逐场景段并发分析数（机械硬盘/USB外置盘建议 1，串行避免寻道） |
 | `--all` | flag | false | 处理所有未识别文件（无视 needs_vision 标记） |
 | `--debug` | flag | false | 调试模式，保存检测结果和 VLM 输入输出 |
 | `--debug-dir` | str | `data/debug` | 调试数据输出目录 |
